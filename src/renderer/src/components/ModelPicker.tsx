@@ -1,0 +1,325 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { JSX, KeyboardEvent as ReactKeyboardEvent } from 'react'
+import type { Model, Provider } from '@opencode-ai/sdk'
+import { useStore } from '../lib/store'
+import { isAgentModel } from '../lib/models'
+
+/** Dispatched by App.tsx on Ctrl+K. */
+const FOCUS_MODEL_EVENT = 'opencode-desktop:focus-model'
+
+/**
+ * Free, non-Anthropic providers surface first, in this order. Anything unknown
+ * sorts alphabetically after them; anthropic always sinks to the bottom.
+ */
+const FREE_FIRST = ['groq', 'google', 'openrouter', 'cerebras', 'mistral'] as const
+const FREE_SET = new Set<string>(FREE_FIRST)
+
+function providerRank(id: string): number {
+  const i = FREE_FIRST.indexOf(id as (typeof FREE_FIRST)[number])
+  if (i !== -1) return i
+  if (id === 'anthropic') return 1000
+  return 100
+}
+
+function formatContext(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return ''
+  if (n >= 1_000_000) {
+    const m = n / 1_000_000
+    return `${m >= 10 ? Math.round(m) : Math.round(m * 10) / 10}M`
+  }
+  if (n >= 1000) return `${Math.round(n / 1000)}K`
+  return String(n)
+}
+
+type Group = { provider: Provider; free: boolean; models: Model[] }
+type Flat = { providerID: string; modelID: string }
+
+export function ModelPicker(): JSX.Element {
+  const providers = useStore((s) => s.providers)
+  const providerID = useStore((s) => s.providerID)
+  const modelID = useStore((s) => s.modelID)
+  const setModel = useStore((s) => s.setModel)
+
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [cursor, setCursor] = useState(0)
+  const [showAll, setShowAll] = useState(false)
+
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  const listRef = useRef<HTMLDivElement | null>(null)
+
+  const groups: Group[] = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    const sorted = [...providers].sort((a, b) => {
+      const d = providerRank(a.id) - providerRank(b.id)
+      return d !== 0 ? d : a.name.localeCompare(b.name)
+    })
+
+    const out: Group[] = []
+    for (const p of sorted) {
+      const providerHit =
+        q.length === 0 || p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q)
+      const models = Object.values(p.models)
+        .filter((m) => showAll || isAgentModel(m))
+        .filter(
+          (m) => providerHit || m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)
+        )
+        .sort((a, b) => {
+          const ad = a.status === 'deprecated' ? 1 : 0
+          const bd = b.status === 'deprecated' ? 1 : 0
+          return ad !== bd ? ad - bd : a.name.localeCompare(b.name)
+        })
+      if (models.length > 0) out.push({ provider: p, free: FREE_SET.has(p.id), models })
+    }
+    return out
+  }, [providers, query, showAll])
+
+  const flat: Flat[] = useMemo(
+    () => groups.flatMap((g) => g.models.map((m) => ({ providerID: g.provider.id, modelID: m.id }))),
+    [groups]
+  )
+
+  const current = useMemo(() => {
+    if (!providerID || !modelID) return null
+    const p = providers.find((x) => x.id === providerID)
+    if (!p) return { providerName: providerID, modelName: modelID }
+    const m = p.models[modelID]
+    return { providerName: p.name, modelName: m ? m.name : modelID }
+  }, [providers, providerID, modelID])
+
+  /* ---- open / close ----------------------------------------------------- */
+  const openPicker = useCallback(() => {
+    setOpen(true)
+    setQuery('')
+    const idx = flat.findIndex((f) => f.providerID === providerID && f.modelID === modelID)
+    setCursor(idx >= 0 ? idx : 0)
+  }, [flat, providerID, modelID])
+
+  const closePicker = useCallback(() => {
+    setOpen(false)
+    setQuery('')
+  }, [])
+
+  useEffect(() => {
+    const focus = (): void => {
+      openPicker()
+      window.setTimeout(() => inputRef.current?.focus(), 0)
+    }
+    window.addEventListener(FOCUS_MODEL_EVENT, focus)
+    return () => window.removeEventListener(FOCUS_MODEL_EVENT, focus)
+  }, [openPicker])
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent): void => {
+      const el = rootRef.current
+      if (el && e.target instanceof Node && !el.contains(e.target)) closePicker()
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open, closePicker])
+
+  useEffect(() => {
+    if (open) inputRef.current?.focus()
+  }, [open])
+
+  const prevFlatRef = useRef(flat)
+  useEffect(() => {
+    const prev = prevFlatRef.current
+    prevFlatRef.current = flat
+    if (flat.length === 0) {
+      setCursor(0)
+      return
+    }
+    const old = prev[cursor >= 0 && cursor < prev.length ? cursor : 0]
+    if (old) {
+      const next = flat.findIndex(
+        (f) => f.providerID === old.providerID && f.modelID === old.modelID
+      )
+      setCursor(next >= 0 ? next : Math.min(cursor, flat.length - 1))
+    } else {
+      setCursor(Math.min(cursor, flat.length - 1))
+    }
+  }, [flat])
+
+  useEffect(() => {
+    if (!open) return
+    const el = listRef.current?.querySelector<HTMLElement>(`[data-idx="${cursor}"]`)
+    el?.scrollIntoView({ block: 'nearest' })
+  }, [cursor, open])
+
+  const choose = useCallback(
+    (pid: string, mid: string) => {
+      setModel(pid, mid)
+      closePicker()
+    },
+    [setModel, closePicker]
+  )
+
+  const onKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        closePicker()
+        return
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        if (flat.length > 0) setCursor((c) => (c + 1) % flat.length)
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        if (flat.length > 0) setCursor((c) => (c - 1 + flat.length) % flat.length)
+      } else if (e.key === 'Home') {
+        e.preventDefault()
+        setCursor(0)
+      } else if (e.key === 'End') {
+        e.preventDefault()
+        setCursor(Math.max(0, flat.length - 1))
+      } else if (e.key === 'Enter') {
+        e.preventDefault()
+        const pick = flat[cursor]
+        if (pick) choose(pick.providerID, pick.modelID)
+      }
+    },
+    [flat, cursor, choose, closePicker]
+  )
+
+  let index = -1
+
+  return (
+    <div className="modelpicker" ref={rootRef}>
+      <button
+        type="button"
+        className="modelpicker__trigger"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={current ? `${current.providerName} · ${current.modelName} (Ctrl+K)` : 'Pick a model (Ctrl+K)'}
+        onClick={() => (open ? closePicker() : openPicker())}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowDown' && !open) {
+            e.preventDefault()
+            openPicker()
+          }
+        }}
+      >
+        <span className="modelpicker__trigger-text">
+          <span className="modelpicker__label">Model</span>
+          {current ? (
+            <span className="modelpicker__value">
+              {current.modelName} <span className="modelpicker__ctx">· {current.providerName}</span>
+            </span>
+          ) : (
+            <span className="modelpicker__value modelpicker__value--empty">Select a model…</span>
+          )}
+        </span>
+        <span className="modelpicker__chev" aria-hidden="true">
+          {open ? '▲' : '▼'}
+        </span>
+      </button>
+
+      {open && (
+        <div className="modelpicker__pop" onKeyDown={onKeyDown}>
+          <input
+            ref={inputRef}
+            className="modelpicker__search"
+            type="text"
+            value={query}
+            spellCheck={false}
+            autoComplete="off"
+            placeholder="Search provider or model…"
+            aria-label="Search models"
+            onChange={(e) => {
+              setQuery(e.target.value)
+              setCursor(0)
+            }}
+          />
+
+          <div className="modelpicker__list" role="listbox" ref={listRef}>
+            {groups.length === 0 && (
+              <div className="modelpicker__empty">
+                {providers.length === 0
+                  ? 'No providers configured. Open Providers to connect one.'
+                  : `No model matches “${query}”.`}
+              </div>
+            )}
+
+            {groups.map((g) => (
+              <div className="modelpicker__group" key={g.provider.id}>
+                <div className="modelpicker__group-head">
+                  <span>{g.provider.name}</span>
+                  {g.free && <span className="modelpicker__free">free tier</span>}
+                </div>
+                {g.models.map((m) => {
+                  index += 1
+                  const idx = index
+                  const selected = g.provider.id === providerID && m.id === modelID
+                  const ctx = formatContext(m.limit.context)
+                  const cls = [
+                    'modelpicker__opt',
+                    idx === cursor ? 'modelpicker__opt--active' : '',
+                    selected ? 'modelpicker__opt--selected' : ''
+                  ]
+                    .filter(Boolean)
+                    .join(' ')
+                  return (
+                    <button
+                      type="button"
+                      key={`${g.provider.id}/${m.id}`}
+                      className={cls}
+                      data-idx={idx}
+                      role="option"
+                      aria-selected={selected}
+                      title={`${g.provider.id}/${m.id}`}
+                      onMouseEnter={() => setCursor(idx)}
+                      onClick={() => choose(g.provider.id, m.id)}
+                    >
+                      <span className="modelpicker__opt-main">
+                        <span className="modelpicker__opt-name">{m.name}</span>
+                        <span className="modelpicker__badges">
+                          {m.capabilities.reasoning && (
+                            <span className="modelpicker__badge">reasoning</span>
+                          )}
+                          {m.capabilities.toolcall && <span className="modelpicker__badge">tools</span>}
+                          {m.capabilities.input.image && (
+                            <span className="modelpicker__badge">vision</span>
+                          )}
+                          {m.status === 'deprecated' && (
+                            <span className="modelpicker__badge modelpicker__badge--warn">
+                              deprecated
+                            </span>
+                          )}
+                          {(m.status === 'alpha' || m.status === 'beta') && (
+                            <span className="modelpicker__badge">{m.status}</span>
+                          )}
+                          {!isAgentModel(m) && (
+                            <span className="modelpicker__badge modelpicker__badge--warn">
+                              non-chat
+                            </span>
+                          )}
+                        </span>
+                      </span>
+                      {ctx && <span className="modelpicker__ctx">{ctx}</span>}
+                    </button>
+                  )
+                })}
+              </div>
+            ))}
+          </div>
+
+          <div className="modelpicker__footer">
+            <label className="modelpicker__toggle">
+              <input
+                type="checkbox"
+                checked={showAll}
+                onChange={(e) => setShowAll(e.target.checked)}
+              />
+              Show all models
+            </label>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}

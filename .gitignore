@@ -1,0 +1,41 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# electron-vite build output
+out/
+
+# electron-builder output
+dist/
+release/
+
+# typescript incremental / project-reference state
+*.tsbuildinfo
+.tsbuildinfo/
+
+# secrets — never commit real provider keys.
+# OpenCode stores credentials in its own auth store (see README), not here.
+.env
+.env.*
+!.env.example
+opencode.json
+auth.json
+
+# logs
+*.log
+npm-debug.log*
+logs/
+
+# editors / os
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# caches
+.cache/
+.vite/
+.eslintcache

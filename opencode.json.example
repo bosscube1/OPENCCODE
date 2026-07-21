@@ -1,0 +1,100 @@
+// OpenCode Desktop — example OpenCode configuration.
+//
+// Copy this file to `opencode.json` (project-local) or `~/.config/opencode/opencode.json`
+// (global) and edit. OpenCode parses JSONC, so these `//` comments are legal — strip them
+// anyway if you paste the contents into a stricter tool.
+//
+// IMPORTANT: no real API keys go in this file. Every `apiKey` below is an `{env:VAR}`
+// reference that OpenCode resolves from the environment at load time. The preferred route
+// is not env vars at all — run `opencode auth login`, pick the provider, and OpenCode
+// stores the key in its own credential store (`~/.local/share/opencode/auth.json` on
+// Windows: `%USERPROFILE%\.local\share\opencode\auth.json`). Providers authenticated that
+// way need no `provider` entry here at all; they show up in the model picker automatically.
+//
+// Everything here is deliberately non-Anthropic: these are the providers with usable free
+// tiers. `dist:win` builds of OpenCode Desktop never require an Anthropic key.
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  // Default model the app starts on, "provider/model". OpenCode Desktop persists whatever
+  // you last chose in the model picker, so this is only the very first-run default.
+  "model": "groq/llama-3.3-70b-versatile",
+
+  // Cheap/fast model used for background chores like session title generation.
+  "small_model": "groq/llama-3.1-8b-instant",
+
+  // Uncomment to hide every provider except these in the picker.
+  // "enabled_providers": ["groq", "google", "openrouter"],
+
+  // Or keep auto-detection but drop the ones you do not want.
+  // "disabled_providers": ["anthropic"],
+
+  "provider": {
+    // ----------------------------------------------------------------------------
+    // Groq — free tier, very high tokens/sec. Key: https://console.groq.com/keys
+    // `opencode auth login` -> Groq  (preferred), or set GROQ_API_KEY.
+    // ----------------------------------------------------------------------------
+    "groq": {
+      "options": {
+        "apiKey": "{env:GROQ_API_KEY}"
+      },
+      "models": {
+        "llama-3.3-70b-versatile": {},
+        "llama-3.1-8b-instant": {},
+        "openai/gpt-oss-120b": {},
+        "moonshotai/kimi-k2-instruct": {},
+        "qwen/qwen3-32b": {}
+      }
+    },
+
+    // ----------------------------------------------------------------------------
+    // Google Gemini — free tier via AI Studio. Key: https://aistudio.google.com/apikey
+    // `opencode auth login` -> Google, or set GEMINI_API_KEY.
+    // ----------------------------------------------------------------------------
+    "google": {
+      "options": {
+        "apiKey": "{env:GEMINI_API_KEY}"
+      },
+      "models": {
+        "gemini-2.5-pro": {},
+        "gemini-2.5-flash": {},
+        "gemini-2.5-flash-lite": {},
+        "gemini-2.0-flash": {}
+      }
+    },
+
+    // ----------------------------------------------------------------------------
+    // OpenRouter — aggregator; every model id below is one of its `:free` variants.
+    // Key: https://openrouter.ai/keys  ·  `opencode auth login` -> OpenRouter,
+    // or set OPENROUTER_API_KEY.
+    // ----------------------------------------------------------------------------
+    "openrouter": {
+      "options": {
+        "apiKey": "{env:OPENROUTER_API_KEY}"
+      },
+      "models": {
+        "deepseek/deepseek-r1:free": {},
+        "qwen/qwen3-coder:free": {},
+        "meta-llama/llama-3.3-70b-instruct:free": {},
+        "moonshotai/kimi-k2:free": {},
+        "z-ai/glm-4.5-air:free": {}
+      }
+    }
+  },
+
+  // Agent presets. `plan` is read-only reasoning; `build` can edit files.
+  // Point them at different providers if you want a strong planner and a fast builder.
+  "agent": {
+    "plan": {
+      "model": "google/gemini-2.5-pro"
+    },
+    "build": {
+      "model": "groq/llama-3.3-70b-versatile"
+    }
+  },
+
+  // Do not let sessions leak to opencode.ai's share service by accident.
+  "share": "disabled",
+
+  "logLevel": "INFO"
+}

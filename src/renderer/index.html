@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>OpenCode Desktop</title>
+
+    <!--
+      Content Security Policy.
+
+      The renderer never talks to the network itself — every OpenCode call goes
+      through IPC to the main process — so `connect-src` only has to cover the
+      Vite dev server and its HMR websocket on loopback.
+
+      `'unsafe-inline'` is required in two places and only two:
+        * style-src  — Vite injects <style> tags for index.css / chat.css in dev.
+        * script-src — @vitejs/plugin-react injects the React Fast Refresh
+                       preamble as an inline <script type="module"> in dev.
+      Everything else is locked down: no eval, no objects, no frames, no remote
+      origins, no form submission.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none';
+               script-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:*;
+               style-src 'self' 'unsafe-inline';
+               img-src 'self' data: blob:;
+               font-src 'self' data:;
+               connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*;
+               worker-src 'self' blob:;
+               base-uri 'none';
+               form-action 'none';
+               frame-src 'none';
+               object-src 'none'"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

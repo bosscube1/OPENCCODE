@@ -1,0 +1,49 @@
+appId: com.opencode.desktop
+productName: OpenCode Desktop
+copyright: Copyright © 2026 OpenCode Desktop contributors
+
+directories:
+  # Optional icons / installer assets live here (build/icon.ico). Absent is fine.
+  buildResources: build
+  output: dist
+
+# Positive patterns replace the default "**/*" for ordinary files.
+# Production dependencies under node_modules (i.e. @opencode-ai/sdk, which the
+# main process loads at runtime) are collected separately by electron-builder
+# and are NOT affected by these patterns — only "!" patterns can exclude them.
+files:
+  - out/**/*
+  - resources/**/*
+  - package.json
+  - '!**/*.map'
+  - '!**/*.ts'
+
+asarUnpack:
+  - resources/**
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  executableName: opencode-desktop
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: ${productName}
+  uninstallDisplayName: ${productName}
+  artifactName: ${productName}-${version}-setup.${ext}
+
+portable:
+  artifactName: ${productName}-${version}-portable.${ext}
+
+# No auto-update server is configured for this project.
+publish: null
