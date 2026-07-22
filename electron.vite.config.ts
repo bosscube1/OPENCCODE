@@ -62,7 +62,11 @@ export default defineConfig({
     build: {
       externalizeDeps: true,
       lib: {
-        entry: r('./src/preload/index.ts')
+        entry: r('./src/preload/index.ts'),
+        // Sandboxed Electron renderers load preload scripts as CommonJS.
+        // Emitting ESM here produces index.mjs, which Electron's sandbox
+        // rejects before contextBridge can expose window.api.
+        formats: ['cjs']
       },
       rollupOptions: {
         external: nodeExternals
