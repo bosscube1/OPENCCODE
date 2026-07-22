@@ -25,6 +25,26 @@ const nodeExternals: string[] = [
  */
 const mainExternals: string[] = [...nodeExternals, '@opencode-ai/sdk']
 
+/**
+ * The renderer's index.html ships a dev-friendly CSP (loopback script/connect-src
+ * for Vite HMR) so `vite dev` works. That policy would be needlessly permissive in
+ * a packaged build, so on `build` only, swap it for a locked-down production CSP.
+ * `style-src 'unsafe-inline'` stays — react-markdown / highlight.js emit inline
+ * styles — but there is no `'unsafe-eval'` and no remote origins anywhere.
+ */
+const prodCspPlugin = {
+  name: 'prod-csp',
+  apply: 'build' as const,
+  transformIndexHtml(html: string): string {
+    const prodCsp =
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'"
+    return html.replace(
+      /<meta[^>]+http-equiv=["']Content-Security-Policy["'][^>]*>/i,
+      `<meta http-equiv="Content-Security-Policy" content="${prodCsp}">`
+    )
+  }
+}
+
 export default defineConfig({
   main: {
     build: {
@@ -52,7 +72,7 @@ export default defineConfig({
 
   renderer: {
     root: r('./src/renderer'),
-    plugins: [react()],
+    plugins: [react(), prodCspPlugin],
     resolve: {
       alias: {
         '@renderer': r('./src/renderer/src')

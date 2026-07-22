@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolPart, ToolState } from '../lib/types'
 import { formatDuration } from '../lib/format'
+import { highlightCode } from '../lib/highlight'
 
 /* ------------------------------------------------------------------ *
  * Defensive narrowing. `input` is Record<string, unknown> — never cast.
@@ -183,17 +184,30 @@ function DiffView({ lines }: { lines: DiffLine[] }): ReactNode {
   const overflowing = lines.length > DIFF_CLAMP
   const shown = expanded || !overflowing ? lines : lines.slice(0, DIFF_CLAMP)
 
+  const diffText = shown
+    .map((line) => (line.kind === 'add' ? '+' : line.kind === 'del' ? '-' : ' ') + line.text)
+    .join('\n')
+  const html = highlightCode(diffText, 'diff')
+
   return (
     <>
       <div className="tool__diff">
-        {shown.map((line, index) => (
-          <div key={index} className={`tool__diffline tool__diffline--${line.kind}`}>
-            <span className="tool__diffmark">
-              {line.kind === 'add' ? '+' : line.kind === 'del' ? '-' : ' '}
-            </span>
-            <span className="tool__difftext">{line.text === '' ? ' ' : line.text}</span>
-          </div>
-        ))}
+        {html ? (
+          <div
+            className="hljs language-diff"
+            style={{ padding: '0 10px', whiteSpace: 'pre' }}
+            dangerouslySetInnerHTML={{ __html: html }}
+          />
+        ) : (
+          shown.map((line, index) => (
+            <div key={index} className={`tool__diffline tool__diffline--${line.kind}`}>
+              <span className="tool__diffmark">
+                {line.kind === 'add' ? '+' : line.kind === 'del' ? '-' : ' '}
+              </span>
+              <span className="tool__difftext">{line.text === '' ? ' ' : line.text}</span>
+            </div>
+          ))
+        )}
       </div>
       {overflowing ? (
         <button

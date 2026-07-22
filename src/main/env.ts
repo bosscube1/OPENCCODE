@@ -11,6 +11,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { PROVIDER_CATALOG } from './providerCatalog'
 
 export type ProviderEnv = {
   vars: Record<string, string>
@@ -23,7 +24,7 @@ export type ProviderEnv = {
 /* ------------------------------------------------------------------ */
 
 /** Only these keys may pass through from the `.env` file into the child process. */
-const ALLOWLIST: ReadonlySet<string> = new Set([
+export const ALLOWLIST: ReadonlySet<string> = new Set([
   'GEMINI_API_KEY',
   'GOOGLE_GENERATIVE_AI_API_KEY',
   'GOOGLE_API_KEY',
@@ -78,11 +79,30 @@ const BLOCKLIST: ReadonlySet<string> = new Set([
  * without the GOOGLE_GENERATIVE_AI_API_KEY alias, opencode reports
  * "Google Generative AI API key is missing".
  */
-const ALIASES: Readonly<Record<string, readonly string[]>> = {
+export const ALIASES: Readonly<Record<string, readonly string[]>> = {
   GEMINI_API_KEY: ['GOOGLE_GENERATIVE_AI_API_KEY', 'GOOGLE_API_KEY'],
   HUGGINGFACE_API_KEY: ['HF_TOKEN'],
   GITHUB_MODELS_TOKEN: ['GITHUB_TOKEN'],
   NVIDIA_NIM_API_KEY: ['NVIDIA_API_KEY']
+}
+
+/**
+ * Provider IDs whose API-key provenance is known to this app.  This intentionally
+ * uses the effective child environment rather than OpenCode's provider list:
+ * a discovered provider is not proof that it has a usable key.  Alias targets
+ * are checked in both directions so GOOGLE_API_KEY and GEMINI_API_KEY both
+ * authorize the Google provider.
+ */
+export function linkedProviderIDs(env: Record<string, string | undefined>): string[] {
+  const linked = new Set<string>()
+  for (const entry of PROVIDER_CATALOG) {
+    const names = new Set<string>([entry.envVar, ...(ALIASES[entry.envVar] ?? [])])
+    for (const [source, targets] of Object.entries(ALIASES)) {
+      if (targets.includes(entry.envVar)) names.add(source)
+    }
+    if ([...names].some((name) => Boolean(env[name]?.trim()))) linked.add(entry.providerID)
+  }
+  return [...linked].sort()
 }
 
 /* ------------------------------------------------------------------ */
@@ -195,14 +215,22 @@ export function redactedSummary(vars: Record<string, string>): string {
 
 /**
  * Build the environment for the `opencode serve` child process.
- * Starts from `process.env`, strips blocklisted keys (trading credentials,
- * data-provider keys), then merges the allowlisted provider vars on top.
+ *
+ * This is deliberately an allow-list, not a deny-list: the OpenCode process
+ * only needs normal OS/process variables plus provider credentials explicitly
+ * linked in this application.  Forwarding the full desktop environment would
+ * make unrelated secrets available to prompts, tools, and extensions.
  */
 export function buildChildEnv(providerVars: Record<string, string>): Record<string, string> {
+  const runtimeKeys = new Set([
+    'APPDATA', 'COMSPEC', 'HOMEDRIVE', 'HOMEPATH', 'LOCALAPPDATA', 'NUMBER_OF_PROCESSORS',
+    'OS', 'PATH', 'PATHEXT', 'PROCESSOR_ARCHITECTURE', 'PROCESSOR_IDENTIFIER', 'PROGRAMDATA',
+    'SYSTEMDRIVE', 'SYSTEMROOT', 'TEMP', 'TMP', 'USERDOMAIN', 'USERNAME', 'USERPROFILE', 'WINDIR'
+  ])
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined) continue
-    if (BLOCKLIST.has(key)) continue
+    if (!runtimeKeys.has(key.toUpperCase())) continue
     env[key] = value
   }
   return { ...env, ...providerVars }

@@ -1,0 +1,85 @@
+.quick-entry {
+  height: 100%;
+  padding: 12px;
+  background: var(--bg);
+}
+
+.quick-entry__composer {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--card-radius);
+  background: var(--bg-alt);
+  box-shadow: var(--shadow);
+}
+
+.quick-entry__input {
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  line-height: 1.5;
+}
+
+.quick-entry__input::placeholder {
+  color: var(--fg-dim);
+}
+
+.quick-entry__input:disabled {
+  opacity: 0.7;
+}
+
+.quick-entry__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.quick-entry__feedback {
+  min-width: 0;
+  flex: 1;
+  font-size: 11px;
+}
+
+.quick-entry__hint {
+  color: var(--fg-dim);
+}
+
+.quick-entry__error {
+  color: var(--danger);
+}
+
+.quick-entry__submit {
+  flex: none;
+  padding: 6px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.quick-entry__submit:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.quick-entry__submit:focus-visible,
+.quick-entry__input:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.quick-entry__submit:disabled {
+  cursor: default;
+  opacity: 0.5;
+}

@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import { App } from './App'
+import { QuickEntry } from './components/QuickEntry'
 import './index.css'
 
 const container = document.getElementById('root')
@@ -12,6 +13,6 @@ if (!container) {
 
 createRoot(container).render(
   <StrictMode>
-    <App />
+    {window.location.hash === '#/quick' ? <QuickEntry /> : <App />}
   </StrictMode>
 )

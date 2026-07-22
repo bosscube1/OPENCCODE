@@ -8,12 +8,16 @@ import type {
   MessageWithParts,
   Part,
   ReasoningPart,
-  TextPart,
   ToolPart
 } from '../lib/types'
 import { isFilePart, isTextPart } from '../lib/types'
 import { formatCost, formatDuration, formatTokens } from '../lib/format'
+import { guessMime } from '../lib/fileurl'
 import { ToolCall } from './ToolCall'
+import { ImageLightbox } from './ImageLightbox'
+import { highlightCode } from '../lib/highlight'
+import { extractArtifactsFromMessages } from '../lib/artifacts'
+import { useStore } from '../lib/store'
 
 /* ------------------------------------------------------------------ *
  * Local helpers
@@ -78,6 +82,8 @@ function CodeBlock({ language, code }: { language: string; code: string }): Reac
     })()
   }, [code])
 
+  const html = highlightCode(code, language)
+
   return (
     <div className="msg__codeblock">
       <div className="msg__codebar">
@@ -87,7 +93,14 @@ function CodeBlock({ language, code }: { language: string; code: string }): Reac
         </button>
       </div>
       <pre className="msg__codepre">
-        <code>{code}</code>
+        {html ? (
+          <code
+            className={`hljs language-${language}`}
+            dangerouslySetInnerHTML={{ __html: html }}
+          />
+        ) : (
+          <code>{code}</code>
+        )}
       </pre>
     </div>
   )
@@ -128,12 +141,13 @@ const markdownComponents: Components = {
 
 const REMARK_PLUGINS = [remarkGfm]
 
-function MarkdownText({ text }: { text: string }): ReactNode {
+function MarkdownText({ text, caret }: { text: string; caret?: boolean }): ReactNode {
   return (
     <div className="msg__markdown">
       <Markdown remarkPlugins={REMARK_PLUGINS} components={markdownComponents}>
         {text}
       </Markdown>
+      {caret ? <span className="msg__caret">▌</span> : null}
     </div>
   )
 }
@@ -174,6 +188,29 @@ function fileLabel(part: FilePart): string {
   return part.url
 }
 
+function isImageFile(part: FilePart): boolean {
+  const mime = part.mime || guessMime(fileLabel(part))
+  return mime.startsWith('image/')
+}
+
+function ImageThumbnail({
+  part,
+  onOpen
+}: {
+  part: FilePart
+  onOpen: (src: string) => void
+}): ReactNode {
+  return (
+    <img
+      className="msg__thumb"
+      src={part.url}
+      alt={fileLabel(part)}
+      onClick={() => onOpen(part.url)}
+      title={fileLabel(part)}
+    />
+  )
+}
+
 function FileChip({ part }: { part: FilePart }): ReactNode {
   return (
     <span className="msg__file" title={part.url}>
@@ -186,22 +223,41 @@ function FileChip({ part }: { part: FilePart }): ReactNode {
   )
 }
 
-/** Only text / reasoning / tool / file are rendered; every other Part member is dropped. */
-function isRenderable(part: Part): part is TextPart | ReasoningPart | ToolPart | FilePart {
+/** Only text / reasoning / tool / file / retry / compaction / subtask are rendered; every other Part member is dropped. */
+function isRenderable(part: Part): boolean {
   if (part.type === 'text' || part.type === 'reasoning') return part.text.trim() !== ''
-  return part.type === 'tool' || part.type === 'file'
+  return ['tool', 'file', 'retry', 'compaction', 'subtask'].includes(part.type)
 }
 
-function AssistantPart({ part }: { part: TextPart | ReasoningPart | ToolPart | FilePart }): ReactNode {
+function AssistantPart({
+  part,
+  caret,
+  onImageOpen
+}: {
+  part: Part
+  caret?: boolean
+  onImageOpen?: (src: string) => void
+}): ReactNode {
   switch (part.type) {
     case 'text':
-      return <MarkdownText text={part.text} />
+      return <MarkdownText text={part.text} caret={caret} />
     case 'reasoning':
       return <Reasoning part={part} />
     case 'tool':
-      return <ToolCall part={part} />
-    case 'file':
-      return <FileChip part={part} />
+      return <ToolCall part={part as ToolPart} />
+    case 'file': {
+      const filePart = part as FilePart
+      if (isImageFile(filePart) && onImageOpen) {
+        return <ImageThumbnail part={filePart} onOpen={onImageOpen} />
+      }
+      return <FileChip part={filePart} />
+    }
+    case 'retry':
+      return <div className="msg__retry-chip">Retry {part.attempt}</div>
+    case 'compaction':
+      return <hr className="msg__compaction-divider" />
+    case 'subtask':
+      return <div className="msg__subtask-chip">Subtask: {part.description}</div>
     default:
       return null
   }
@@ -212,9 +268,13 @@ function AssistantPart({ part }: { part: TextPart | ReasoningPart | ToolPart | F
  * ------------------------------------------------------------------ */
 
 export function MessageView({ message }: { message: MessageWithParts }): ReactNode {
+  const [copiedText, setCopiedText] = useState(false)
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
+  const [editingText, setEditingText] = useState<string | null>(null)
   const { info, parts } = message
 
   const textParts = useMemo(() => parts.filter(isTextPart), [parts])
+  const msgArtifacts = useMemo(() => extractArtifactsFromMessages([message]), [message])
 
   if (info.role === 'user') {
     const body = textParts
@@ -225,18 +285,97 @@ export function MessageView({ message }: { message: MessageWithParts }): ReactNo
 
     if (body === '' && files.length === 0) return null
 
+    const handleEdit = () => {
+      setEditingText(body)
+    }
+
+    const handleSaveEdit = () => {
+      if (editingText && editingText.trim() !== body.trim()) {
+        const confirmed = window.confirm(
+          'Editing resends from here. This reverts the conversation and any file changes made after this message. Continue?'
+        )
+        if (confirmed) {
+          void useStore.getState().editAndResend(info.id, editingText.trim())
+          setEditingText(null)
+        }
+      } else {
+        setEditingText(null)
+      }
+    }
+
+    const handleCancelEdit = () => {
+      setEditingText(null)
+    }
+
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === 'Escape') {
+        handleCancelEdit()
+      }
+    }
+
     return (
       <article className="msg msg--user">
         <div className="msg__bubble">
-          {body === '' ? null : <div className="msg__usertext">{body}</div>}
-          {files.length > 0 ? (
-            <div className="msg__files">
-              {files.map((part) => (
-                <FileChip key={part.id} part={part} />
-              ))}
+          {editingText !== null ? (
+            <div className="msg__edit-container">
+              <textarea
+                className="msg__edit-area"
+                value={editingText}
+                onChange={(e) => setEditingText(e.currentTarget.value)}
+                onKeyDown={handleKeyDown}
+                autoFocus
+              />
+              <div className="msg__edit-actions">
+                <button
+                  type="button"
+                  className="msg__edit-save"
+                  onClick={handleSaveEdit}
+                  disabled={editingText.trim() === body.trim()}
+                >
+                  Save
+                </button>
+                <button type="button" className="msg__edit-cancel" onClick={handleCancelEdit}>
+                  Cancel
+                </button>
+              </div>
             </div>
-          ) : null}
+          ) : (
+            <>
+              {body === '' ? null : (
+                <div className="msg__usertext-wrapper">
+                  <div className="msg__usertext">{body}</div>
+                  <button
+                    type="button"
+                    className="msg__edit-btn"
+                    onClick={handleEdit}
+                    title="Edit message"
+                  >
+                    Edit
+                  </button>
+                </div>
+              )}
+              {files.length > 0 ? (
+                <div className="msg__files">
+                  {files.map((part) => {
+                    const isImage = isImageFile(part)
+                    return isImage ? (
+                      <ImageThumbnail
+                        key={part.id}
+                        part={part}
+                        onOpen={setLightboxSrc}
+                      />
+                    ) : (
+                      <FileChip key={part.id} part={part} />
+                    )
+                  })}
+                </div>
+              ) : null}
+            </>
+          )}
         </div>
+        {lightboxSrc && (
+          <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
+        )}
       </article>
     )
   }
@@ -247,16 +386,39 @@ export function MessageView({ message }: { message: MessageWithParts }): ReactNo
     info.time.completed !== undefined ? info.time.completed - info.time.created : null
 
   const visible = parts.filter(isRenderable)
-
+  const lastTextPart = textParts[textParts.length - 1]
   return (
     <article className="msg msg--assistant">
+      {msgArtifacts.length > 0 && (
+        <div className="msg__artifacts" style={{ marginBottom: '8px' }}>
+          {msgArtifacts.map((art) => (
+            <button
+              key={art.id}
+              type="button"
+              className="msg__artifact-chip"
+              onClick={() => useStore.getState().setActiveArtifactID(art.id)}
+              title={`Click to open ${art.title} in preview panel`}
+            >
+              <span className="msg__artifact-icon">⚡</span>
+              <span>Open Artifact: {art.title}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <div className="msg__parts">
         {visible.map((part) => (
           <div className="msg__part" key={part.id}>
-            <AssistantPart part={part} />
+            <AssistantPart
+              part={part}
+              caret={!finished && part === lastTextPart}
+              onImageOpen={setLightboxSrc}
+            />
           </div>
         ))}
       </div>
+      {lightboxSrc && (
+        <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
+      )}
 
       {visible.length === 0 && !finished ? (
         <div className="msg__working" aria-label="Working">
@@ -303,6 +465,27 @@ export function MessageView({ message }: { message: MessageWithParts }): ReactNo
               <span className="msg__meta">{formatDuration(elapsed)}</span>
             </>
           ) : null}
+          <span className="msg__sep">·</span>
+          <button
+            type="button"
+            className="msg__retry-btn"
+            onClick={() => {
+              const fullText = textParts.map((p) => p.text).join('\n\n')
+              void navigator.clipboard.writeText(fullText)
+              setCopiedText(true)
+              window.setTimeout(() => setCopiedText(false), 1500)
+            }}
+          >
+            {copiedText ? 'Copied' : 'Copy'}
+          </button>
+          <span className="msg__sep">·</span>
+          <button
+            type="button"
+            className="msg__retry-btn"
+            onClick={() => useStore.getState().retryExchange(message.info.id)}
+          >
+            Regenerate
+          </button>
         </footer>
       ) : null}
     </article>

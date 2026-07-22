@@ -45,5 +45,7 @@ nsis:
 portable:
   artifactName: ${productName}-${version}-portable.${ext}
 
-# No auto-update server is configured for this project.
-publish: null
+publish:
+  provider: github
+  owner: bosscube1
+  repo: OPENCCODE

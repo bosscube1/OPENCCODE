@@ -32,6 +32,76 @@ export type {
   Permission
 } from '@opencode-ai/sdk'
 
+// SDK types for new features (Phase 0+)
+export type { Todo, VcsInfo } from '@opencode-ai/sdk'
+
+export type ProjectRecord = {
+  id: string
+  name: string
+  directory: string
+  createdAt: number
+  updatedAt: number
+}
+
+export type KnowledgeFile = { filename: string; size: number; updatedAt: number }
+
+export type McpLocalConfig = {
+  type: 'local'
+  command: string[]
+  environment?: Record<string, string>
+  enabled?: boolean
+  timeout?: number
+}
+
+export type McpRemoteConfig = {
+  type: 'remote'
+  url: string
+  enabled?: boolean
+  headers?: Record<string, string>
+  oauth?: { clientId?: string; clientSecret?: string; scope?: string } | false
+  timeout?: number
+}
+
+export type McpConfig = McpLocalConfig | McpRemoteConfig
+
+export type McpStatus =
+  | { status: 'connected' | 'disabled' | 'needs_auth' }
+  | { status: 'failed' | 'needs_client_registration'; error: string }
+
+export type McpSnapshot = {
+  configs: Record<string, McpConfig>
+  statuses: Record<string, McpStatus>
+}
+
+export type AppSettings = {
+  closeToTray: boolean
+  globalShortcut: string
+}
+
+export type AppSettingsResult = {
+  settings: AppSettings
+  shortcutRegistered: boolean
+  shortcutError?: string
+}
+
+export type UpdateStatus =
+  | { state: 'idle' | 'checking' | 'not-available' | 'downloaded' }
+  | { state: 'available'; version: string }
+  | { state: 'progress'; percent: number }
+  | { state: 'error'; message: string }
+
+/**
+ * Re-exported as ServerCommand to avoid collision with the DOM `Command` interface.
+ * These are project-level slash commands registered on the server.
+ */
+import type { Command as SdkCommand } from '@opencode-ai/sdk'
+export type ServerCommand = SdkCommand
+
+/** Input shape for prompt parts sent over IPC to session.promptAsync. */
+export type PromptPart =
+  | { type: 'text'; text: string }
+  | { type: 'file'; mime: string; filename: string; url: string }
+
 /** A message plus the parts that belong to it, as returned by `oc:messages:list`. */
 export type MessageWithParts = { info: Message; parts: Part[] }
 

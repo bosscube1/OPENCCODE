@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="OpenCode Desktop neutral code mark">
+  <rect x="12" y="12" width="232" height="232" rx="52" fill="#1f1e1d"/>
+  <path d="M108 72 52 128l56 56" fill="none" stroke="#d97757" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m148 72 56 56-56 56" fill="none" stroke="#f5f4ee" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

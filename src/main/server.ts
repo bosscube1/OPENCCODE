@@ -13,7 +13,8 @@ import { createServer } from 'node:net'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { createOpencodeClient, type Event as OpencodeEvent, type OpencodeClient } from '@opencode-ai/sdk'
-import { buildChildEnv, loadProviderEnv, redactedSummary } from './env'
+import { buildChildEnv, linkedProviderIDs, loadProviderEnv, redactedSummary } from './env'
+import { loadByokEnv } from './keys'
 
 export type ServerStatus = {
   running: boolean
@@ -47,6 +48,8 @@ let eventGeneration = 0
 let eventAbort: AbortController | null = null
 /** Project directory the renderer currently has selected; scopes the SSE subscription. */
 let eventDirectory: string | null = null
+/** Non-secret routing authority for the server instance this process spawned. */
+let authorizedProviderIDs = new Set<string>()
 
 const logRing: string[] = []
 const statusListeners = new Set<StatusListener>()
@@ -82,7 +85,7 @@ function record(chunk: string): void {
 }
 
 /** Last few captured output lines, formatted for an error banner. */
-function tail(lines = 6): string {
+function _tail(lines = 6): string {
   if (logRing.length === 0) return ''
   return `\n${logRing.slice(-lines).join('\n')}`
 }
@@ -217,8 +220,12 @@ async function probeOpencode(port: number): Promise<boolean> {
   try {
     const res = await fetch(`${base}/config`, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) })
     if (!res.ok) return false
-    const body = (await res.json()) as unknown
-    return typeof body === 'object' && body !== null
+    const contentType = res.headers.get('content-type') ?? ''
+    if (!contentType.includes('application/json')) return false
+    const body = (await res.json()) as Record<string, unknown> | null
+    if (typeof body !== 'object' || body === null) return false
+    // Tighten: require at least one OpenCode-specific key to confirm it's not just any JSON response
+    return '$schema' in body || 'provider' in body || 'providers' in body || 'model' in body || 'modelID' in body || 'agent' in body || 'theme' in body
   } catch {
     return false
   }
@@ -292,21 +299,15 @@ async function runEventLoop(generation: number): Promise<void> {
 
 function fail(message: string): ServerStatus {
   client = null
+  authorizedProviderIDs.clear()
   setStatus({ running: false, url: null, error: message })
   return { ...status }
 }
 
 async function doStart(): Promise<ServerStatus> {
   let port = -1
-  let reuse = false
-
   for (let offset = 0; offset < PORT_ATTEMPTS; offset++) {
     const candidate = BASE_PORT + offset
-    if (await probeOpencode(candidate)) {
-      port = candidate
-      reuse = true
-      break
-    }
     if (await isPortFree(candidate)) {
       port = candidate
       break
@@ -320,16 +321,6 @@ async function doStart(): Promise<ServerStatus> {
   }
 
   const url = `http://${HOST}:${port}`
-
-  if (reuse) {
-    // Someone else is already serving here — attach, but never kill it on shutdown.
-    owned = false
-    child = null
-    client = createOpencodeClient({ baseUrl: url })
-    setStatus({ running: true, url })
-    startEventLoop()
-    return { ...status }
-  }
 
   const bin = resolveBinary()
   if (!bin) return fail(NOT_FOUND_MESSAGE)
@@ -350,11 +341,22 @@ async function doStart(): Promise<ServerStatus> {
     )
   }
 
+  // BYOK keys (OS-encrypted store) merge ON TOP of the .env vars — BYOK wins on conflict.
+  const byokVars = loadByokEnv()
+  const byokCount = Object.keys(byokVars).length
+  if (byokCount > 0) {
+    record(`loaded ${byokCount} BYOK keys (encrypted store): ${redactedSummary(byokVars)}`)
+  }
+  const mergedProviderVars = { ...providerEnv.vars, ...byokVars }
+  const childEnv = buildChildEnv(mergedProviderVars)
+  authorizedProviderIDs = new Set(linkedProviderIDs(childEnv))
+  record(`authorized API-key providers: ${[...authorizedProviderIDs].join(', ') || 'none'}`)
+
   let proc: ChildProcess
   try {
     proc = spawn(command, args, {
       cwd: homedir(),
-      env: buildChildEnv(providerEnv.vars),
+      env: childEnv,
       windowsHide: true,
       windowsVerbatimArguments: verbatim,
       stdio: ['ignore', 'pipe', 'pipe']
@@ -443,6 +445,7 @@ export function stopServer(): void {
   child = null
   owned = false
   client = null
+  authorizedProviderIDs.clear()
 
   if (proc && wasOwned) killTree(proc)
 
@@ -461,6 +464,15 @@ export async function restartServer(): Promise<ServerStatus> {
 
 export function getStatus(): ServerStatus {
   return { ...status }
+}
+
+/** Provider IDs backed by an API key in the effective environment of our child server. */
+export function getAuthorizedProviderIDs(): string[] {
+  return [...authorizedProviderIDs].sort()
+}
+
+export function isAuthorizedProvider(providerID: string): boolean {
+  return authorizedProviderIDs.has(providerID)
 }
 
 /** The live SDK client. Throws when the server is not running. */

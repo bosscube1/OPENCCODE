@@ -131,6 +131,25 @@ export function recordFailure(ledger: Ledger, key: ModelKey, _now: number): Ledg
 }
 
 /**
+ * Record a request that made no progress before the watchdog deadline. A timeout
+ * is temporarily treated as unhealthy so the next route cannot immediately pick
+ * the same hung model.
+ */
+export function recordTimeout(ledger: Ledger, key: ModelKey, now: number): Ledger {
+  const existing = ledger[key] ?? { ...DEFAULT_HEALTH }
+  const cooldownMs = Math.min(300000, Math.max(30000, existing.cooldownMs))
+  return {
+    ...ledger,
+    [key]: {
+      ...existing,
+      error: existing.error + 1,
+      cooldownMs,
+      cooldownUntil: now + cooldownMs
+    }
+  }
+}
+
+/**
  * Check if a model is under conservative rate caps (RPM / RPD).
  */
 export function underRateCaps(ledger: Ledger, key: ModelKey, caps: ModelCapsMap, now: number): boolean {

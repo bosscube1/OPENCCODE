@@ -34,11 +34,13 @@ function formatContext(n: number): string {
 type Group = { provider: Provider; free: boolean; models: Model[] }
 type Flat = { providerID: string; modelID: string }
 
-export function ModelPicker(): JSX.Element {
+export function ModelPicker({ compact = false }: { compact?: boolean } = {}): JSX.Element {
   const providers = useStore((s) => s.providers)
   const providerID = useStore((s) => s.providerID)
   const modelID = useStore((s) => s.modelID)
   const setModel = useStore((s) => s.setModel)
+  const autoRotate = useStore((s) => s.autoRotate)
+  const toggleAutoRotate = useStore((s) => s.toggleAutoRotate)
 
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -125,6 +127,9 @@ export function ModelPicker(): JSX.Element {
   }, [open])
 
   const prevFlatRef = useRef(flat)
+  const cursorRef = useRef(cursor)
+  cursorRef.current = cursor
+
   useEffect(() => {
     const prev = prevFlatRef.current
     prevFlatRef.current = flat
@@ -132,14 +137,17 @@ export function ModelPicker(): JSX.Element {
       setCursor(0)
       return
     }
-    const old = prev[cursor >= 0 && cursor < prev.length ? cursor : 0]
+    const currentCursor = cursorRef.current
+    const old = prev[currentCursor >= 0 && currentCursor < prev.length ? currentCursor : 0]
     if (old) {
-      const next = flat.findIndex(
-        (f) => f.providerID === old.providerID && f.modelID === old.modelID
-      )
-      setCursor(next >= 0 ? next : Math.min(cursor, flat.length - 1))
+      setCursor((c) => {
+        const next = flat.findIndex(
+          (f) => f.providerID === old.providerID && f.modelID === old.modelID
+        )
+        return next >= 0 ? next : Math.min(c, flat.length - 1)
+      })
     } else {
-      setCursor(Math.min(cursor, flat.length - 1))
+      setCursor((c) => Math.min(c, flat.length - 1))
     }
   }, [flat])
 
@@ -189,10 +197,10 @@ export function ModelPicker(): JSX.Element {
   let index = -1
 
   return (
-    <div className="modelpicker" ref={rootRef}>
+    <div className={compact ? 'modelpicker modelpicker--compact' : 'modelpicker'} ref={rootRef}>
       <button
         type="button"
-        className="modelpicker__trigger"
+        className={compact ? 'modelpicker__trigger modelpicker__trigger--compact' : 'modelpicker__trigger'}
         aria-haspopup="listbox"
         aria-expanded={open}
         title={current ? `${current.providerName} · ${current.modelName} (Ctrl+K)` : 'Pick a model (Ctrl+K)'}
@@ -204,23 +212,37 @@ export function ModelPicker(): JSX.Element {
           }
         }}
       >
-        <span className="modelpicker__trigger-text">
-          <span className="modelpicker__label">Model</span>
-          {current ? (
-            <span className="modelpicker__value">
-              {current.modelName} <span className="modelpicker__ctx">· {current.providerName}</span>
-            </span>
-          ) : (
-            <span className="modelpicker__value modelpicker__value--empty">Select a model…</span>
-          )}
-        </span>
+        {compact ? (
+          <span className="modelpicker__trigger-text modelpicker__trigger-text--compact">
+            {current ? (
+              <span className="modelpicker__value">
+                {current.modelName}
+                {autoRotate && <span className="modelpicker__badge" style={{ marginLeft: '6px', fontSize: '10px' }} title="Smart Auto-Routing Enabled">⚡ auto</span>}
+              </span>
+            ) : (
+              <span className="modelpicker__value modelpicker__value--empty">Select a model…</span>
+            )}
+          </span>
+        ) : (
+          <span className="modelpicker__trigger-text">
+            <span className="modelpicker__label">Model</span>
+            {current ? (
+              <span className="modelpicker__value">
+                {current.modelName} <span className="modelpicker__ctx">· {current.providerName}</span>
+                {autoRotate && <span className="modelpicker__badge" style={{ marginLeft: '6px', fontSize: '10px' }} title="Smart Auto-Routing Enabled">⚡ auto</span>}
+              </span>
+            ) : (
+              <span className="modelpicker__value modelpicker__value--empty">Select a model…</span>
+            )}
+          </span>
+        )}
         <span className="modelpicker__chev" aria-hidden="true">
           {open ? '▲' : '▼'}
         </span>
       </button>
 
       {open && (
-        <div className="modelpicker__pop" onKeyDown={onKeyDown}>
+        <div className={compact ? 'modelpicker__pop modelpicker__pop--up' : 'modelpicker__pop'} onKeyDown={onKeyDown}>
           <input
             ref={inputRef}
             className="modelpicker__search"
@@ -316,6 +338,14 @@ export function ModelPicker(): JSX.Element {
                 onChange={(e) => setShowAll(e.target.checked)}
               />
               Show all models
+            </label>
+            <label className="modelpicker__toggle modelpicker__toggle--autorotate" title="Automatically cycle free models when 429 rate limit errors occur">
+              <input
+                type="checkbox"
+                checked={autoRotate}
+                onChange={() => toggleAutoRotate()}
+              />
+              ⚡ Auto-Rotate (Free Models)
             </label>
           </div>
         </div>

@@ -8,6 +8,8 @@ import type {
 import { Chat } from './components/Chat'
 import { Sidebar } from './components/Sidebar'
 import { StatusBar } from './components/StatusBar'
+import { ArtifactsPanel } from './components/ArtifactsPanel'
+import { ProjectView } from './components/ProjectView'
 import { useStore } from './lib/store'
 import './index.css'
 
@@ -16,6 +18,7 @@ const SIDEBAR_KEY = 'opencode-desktop:sidebar'
 /** Window events used to reach components that take no props (contract-fixed props). */
 const FOCUS_MODEL_EVENT = 'opencode-desktop:focus-model'
 const CLOSE_PROVIDERS_EVENT = 'opencode-desktop:close-providers'
+const TOGGLE_SETTINGS_EVENT = 'opencode-desktop:toggle-settings'
 
 const MIN_W = 200
 const MAX_W = 520
@@ -93,6 +96,9 @@ export function App(): JSX.Element {
   const server = useStore((s) => s.server)
   const error = useStore((s) => s.error)
   const dismissError = useStore((s) => s.dismissError)
+  const theme = useStore((s) => s.theme)
+  const activeArtifactID = useStore((s) => s.activeArtifactID)
+  const activeView = useStore((s) => s.activeView)
 
   const [width, setWidth] = useState<number>(() => readStoredWidth())
   const [restarting, setRestarting] = useState(false)
@@ -107,6 +113,21 @@ export function App(): JSX.Element {
   useEffect(() => {
     void useStore.getState().init()
   }, [])
+
+  useEffect(() => {
+    return window.api.onQuickEntryPrompt((text) => {
+      void useStore.getState().send(text)
+    })
+  }, [])
+
+  /* ---- theme sync ------------------------------------------------------- */
+  useEffect(() => {
+    if (theme === 'auto') {
+      delete document.documentElement.dataset.theme
+    } else {
+      document.documentElement.dataset.theme = theme
+    }
+  }, [theme])
 
   /* ---- sidebar resize --------------------------------------------------- */
   const persistWidth = useCallback((value: number) => {
@@ -180,10 +201,19 @@ export function App(): JSX.Element {
       } else if (key === 'k') {
         e.preventDefault()
         window.dispatchEvent(new Event(FOCUS_MODEL_EVENT))
+      } else if (key === ',') {
+        e.preventDefault()
+        window.dispatchEvent(new Event(TOGGLE_SETTINGS_EVENT))
       }
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    const unsubscribeMenu = window.api.onMainMenuNewSession(() => {
+      if (useStore.getState().directory) void useStore.getState().newSession()
+    })
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      unsubscribeMenu()
+    }
   }, [])
 
   /* ---- retry ------------------------------------------------------------ */
@@ -251,8 +281,13 @@ export function App(): JSX.Element {
     )
   }
 
+  const panelOpen = activeView === 'chats' && Boolean(activeArtifactID)
+
   return (
-    <div className="app" style={{ '--sidebar-w': `${width}px` } as CSSProperties}>
+    <div
+      className={panelOpen ? 'app app--panel' : 'app'}
+      style={{ '--sidebar-w': `${width}px` } as CSSProperties}
+    >
       <div className="app__sidebar">
         <Sidebar />
       </div>
@@ -286,8 +321,14 @@ export function App(): JSX.Element {
             </button>
           </div>
         )}
-        <Chat />
+        {activeView === 'projects' ? <ProjectView /> : <Chat />}
       </main>
+
+      {panelOpen && (
+        <div className="app__panel">
+          <ArtifactsPanel />
+        </div>
+      )}
 
       <StatusBar />
     </div>
