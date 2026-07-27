@@ -25,6 +25,7 @@ export type ProviderEnv = {
 
 /** Only these keys may pass through from the `.env` file into the child process. */
 export const ALLOWLIST: ReadonlySet<string> = new Set([
+  'NANOGPT_API_KEY',
   'GEMINI_API_KEY',
   'GOOGLE_GENERATIVE_AI_API_KEY',
   'GOOGLE_API_KEY',
@@ -220,8 +221,17 @@ export function redactedSummary(vars: Record<string, string>): string {
  * only needs normal OS/process variables plus provider credentials explicitly
  * linked in this application.  Forwarding the full desktop environment would
  * make unrelated secrets available to prompts, tools, and extensions.
+ *
+ * `extraVars` carries app-GENERATED configuration (currently only
+ * `OPENCODE_CONFIG_CONTENT`), not credentials — which is why it bypasses
+ * ALLOWLIST, whose job is to gate secrets read off the user's disk. Callers
+ * must never put a key value in here; secrets belong in `providerVars`.
+ * It is applied last so generated config cannot be shadowed by a `.env` entry.
  */
-export function buildChildEnv(providerVars: Record<string, string>): Record<string, string> {
+export function buildChildEnv(
+  providerVars: Record<string, string>,
+  extraVars: Record<string, string> = {}
+): Record<string, string> {
   const runtimeKeys = new Set([
     'APPDATA', 'COMSPEC', 'HOMEDRIVE', 'HOMEPATH', 'LOCALAPPDATA', 'NUMBER_OF_PROCESSORS',
     'OS', 'PATH', 'PATHEXT', 'PROCESSOR_ARCHITECTURE', 'PROCESSOR_IDENTIFIER', 'PROGRAMDATA',
@@ -233,5 +243,5 @@ export function buildChildEnv(providerVars: Record<string, string>): Record<stri
     if (!runtimeKeys.has(key.toUpperCase())) continue
     env[key] = value
   }
-  return { ...env, ...providerVars }
+  return { ...env, ...providerVars, ...extraVars }
 }

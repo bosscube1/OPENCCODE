@@ -10,6 +10,8 @@ import { Sidebar } from './components/Sidebar'
 import { StatusBar } from './components/StatusBar'
 import { ArtifactsPanel } from './components/ArtifactsPanel'
 import { ProjectView } from './components/ProjectView'
+import { ImagesView } from './components/ImagesView'
+import { LiveScreenAssistant } from './components/LiveScreenAssistant'
 import { useStore } from './lib/store'
 import './index.css'
 
@@ -103,6 +105,7 @@ export function App(): JSX.Element {
   const [width, setWidth] = useState<number>(() => readStoredWidth())
   const [restarting, setRestarting] = useState(false)
   const [restartError, setRestartError] = useState<string | null>(null)
+  const [liveScreenOpen, setLiveScreenOpen] = useState(false)
 
   const widthRef = useRef(width)
   const draggingRef = useRef(false)
@@ -111,6 +114,7 @@ export function App(): JSX.Element {
 
   /* ---- one-time boot ---------------------------------------------------- */
   useEffect(() => {
+    if (import.meta.env.DEV) document.title = 'OpenCode Desktop (Dev)'
     void useStore.getState().init()
   }, [])
 
@@ -283,13 +287,15 @@ export function App(): JSX.Element {
 
   const panelOpen = activeView === 'chats' && Boolean(activeArtifactID)
 
+  if (liveScreenOpen) return <LiveScreenAssistant onClose={() => setLiveScreenOpen(false)} />
+
   return (
     <div
       className={panelOpen ? 'app app--panel' : 'app'}
       style={{ '--sidebar-w': `${width}px` } as CSSProperties}
     >
       <div className="app__sidebar">
-        <Sidebar />
+        <Sidebar onOpenLiveScreen={() => setLiveScreenOpen(true)} />
       </div>
 
       <div
@@ -321,7 +327,13 @@ export function App(): JSX.Element {
             </button>
           </div>
         )}
-        {activeView === 'projects' ? <ProjectView /> : <Chat />}
+        {activeView === 'projects' ? (
+          <ProjectView />
+        ) : activeView === 'images' ? (
+          <ImagesView />
+        ) : (
+          <Chat />
+        )}
       </main>
 
       {panelOpen && (

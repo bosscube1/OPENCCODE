@@ -475,6 +475,17 @@ body.app--resizing {
   color: var(--fg-dim);
 }
 
+.sidebar__compare-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  cursor: pointer;
+  user-select: none;
+}
+
 .sidebar__rename-input {
   width: 100%;
   background: var(--bg);

@@ -15,6 +15,7 @@ import { delimiter, join } from 'node:path'
 import { createOpencodeClient, type Event as OpencodeEvent, type OpencodeClient } from '@opencode-ai/sdk'
 import { buildChildEnv, linkedProviderIDs, loadProviderEnv, redactedSummary } from './env'
 import { loadByokEnv } from './keys'
+import { nanogptEnv, readCache } from './nanogptConfig'
 
 export type ServerStatus = {
   running: boolean
@@ -348,7 +349,16 @@ async function doStart(): Promise<ServerStatus> {
     record(`loaded ${byokCount} BYOK keys (encrypted store): ${redactedSummary(byokVars)}`)
   }
   const mergedProviderVars = { ...providerEnv.vars, ...byokVars }
-  const childEnv = buildChildEnv(mergedProviderVars)
+
+  // NanoGPT is an OpenCode *custom provider*: its model map has to exist in the child's resolved
+  // config before the server starts, so it is generated from the cached subscription catalogue and
+  // injected as OPENCODE_CONFIG_CONTENT (deep-merges; never touches a user config file). The
+  // generated JSON carries only the `{env:NANOGPT_API_KEY}` placeholder, so it is safe to log.
+  const nanogptVars = nanogptEnv(Boolean(mergedProviderVars.NANOGPT_API_KEY))
+  const childEnv = buildChildEnv(mergedProviderVars, nanogptVars)
+  if (nanogptVars.OPENCODE_CONFIG_CONTENT) {
+    record(`nanogpt: injected ${readCache().chat.length} subscription models`)
+  }
   authorizedProviderIDs = new Set(linkedProviderIDs(childEnv))
   record(`authorized API-key providers: ${[...authorizedProviderIDs].join(', ') || 'none'}`)
 

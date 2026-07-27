@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { PROVIDER_CATALOG, catalogByProvider, catalogByEnvVar } from '../providerCatalog'
+import { ALLOWLIST } from '../env'
 
 describe('providerCatalog', () => {
   it('every entry has non-empty required fields', () => {
@@ -54,5 +55,26 @@ describe('providerCatalog', () => {
         expect(entry.test.authHeader).toBeTruthy()
       }
     }
+  })
+
+  it('catalogByProvider resolves nanogpt correctly', () => {
+    const entry = catalogByProvider('nanogpt')
+    expect(entry).toBeDefined()
+    expect(entry?.envVar).toBe('NANOGPT_API_KEY')
+  })
+
+  it('nanogpt envVar is a member of the ALLOWLIST', () => {
+    const entry = catalogByProvider('nanogpt')
+    expect(entry).toBeDefined()
+    expect(ALLOWLIST.has(entry!.envVar)).toBe(true)
+  })
+
+  it('nanogpt test.url points at the subscription models endpoint', () => {
+    const entry = catalogByProvider('nanogpt')
+    expect(entry?.test?.url).toBe('https://nano-gpt.com/api/subscription/v1/models')
+  })
+
+  it('catalogByEnvVar resolves NANOGPT_API_KEY to the nanogpt provider', () => {
+    expect(catalogByEnvVar('NANOGPT_API_KEY')?.providerID).toBe('nanogpt')
   })
 })

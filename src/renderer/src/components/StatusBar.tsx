@@ -21,6 +21,9 @@ export function StatusBar(): JSX.Element {
   const providers = useStore((s) => s.providers)
   const providerID = useStore((s) => s.providerID)
   const modelID = useStore((s) => s.modelID)
+  const pinnedProviderID = useStore((s) => s.pinnedProviderID)
+  const pinnedModelID = useStore((s) => s.pinnedModelID)
+  const revertToPinned = useStore((s) => s.revertToPinned)
   const sessions = useStore((s) => s.sessions)
   const activeSessionID = useStore((s) => s.activeSessionID)
   const busy = useStore((s) => s.busy)
@@ -95,6 +98,26 @@ export function StatusBar(): JSX.Element {
         <span className="app__status-item app__autorotate" title="Free Model Auto-Routing enabled (cycles models on 429 rate limit)">
           ⚡ Auto-Route
         </span>
+      )}
+
+      {pinnedProviderID && pinnedModelID && (pinnedProviderID !== providerID || pinnedModelID !== modelID) && (
+        <button
+          type="button"
+          className="app__status-item"
+          style={{
+            background: 'var(--warn, #b45309)',
+            color: 'white',
+            border: 'none',
+            padding: '2px 8px',
+            borderRadius: '4px',
+            fontSize: '11px',
+            cursor: 'pointer',
+          }}
+          title={`Failed over from ${pinnedProviderID}/${pinnedModelID}. Click to revert.`}
+          onClick={() => revertToPinned()}
+        >
+          ⚡ {pinnedModelID} → {modelID} ↺
+        </button>
       )}
 
       {branch && (

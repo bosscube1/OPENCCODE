@@ -26,10 +26,51 @@ import {
   type McpSnapshot
 } from './mcp'
 import type { AppSettingsController, AppSettingsResult } from './appSettings'
+import { sendGeminiLive, startGeminiLive, stopGeminiLive, type GeminiLiveInput } from './geminiLive'
+import { markBalanceBilled, readCache, refreshCatalogs, type RefreshResult } from './nanogptConfig'
+import {
+  fetchSubscriptionUsage,
+  generateImage,
+  type NanoChatModel,
+  type NanoImageModel,
+  type NanoUsage
+} from './nanogpt'
+import {
+  deleteImage,
+  listImages,
+  readImage,
+  reconcile,
+  saveImage,
+  type GeneratedImageMeta
+} from './nanogptImages'
+import { classifyBilling, type ImageBilling } from './nanogptBilling'
 
 export type MessageWithParts = { info: Message; parts: Part[] }
 export type ProvidersResult = { providers: Provider[]; default: Record<string, string>; linkedProviderIDs: string[] }
 export type PermissionResponse = 'once' | 'always' | 'reject'
+
+/** Cached NanoGPT catalogues, as returned by `oc:nanogpt:models`. Carries no credentials. */
+export type NanogptModelsResult = {
+  chat: NanoChatModel[]
+  image: NanoImageModel[]
+  /** Image model ids observed to bill balance rather than the subscription. */
+  balanceBilled: string[]
+  fetchedAt: number
+}
+
+/** Result of `oc:nanogpt:generate`. `base64` is the PNG bytes for immediate display. */
+export type NanogptGenerateResult = {
+  images: Array<{ meta: GeneratedImageMeta; base64: string }>
+  /** How this generation was billed, per `classifyBilling`. */
+  billing: ImageBilling
+  paymentSource?: string
+  cost?: number
+  remainingBalance?: number
+  /** Which endpoint served it: 'subscription' means the subscription-scoped path existed. */
+  route: 'subscription' | 'standard'
+  /** True when this call caused the model to be recorded as balance-billing. */
+  blacklisted: boolean
+}
 
 export type RegisterIpcOptions = {
   appSettings?: Pick<AppSettingsController, 'get' | 'set'>
@@ -83,8 +124,36 @@ const CHANNELS = [
   'oc:keys:list',
   'oc:keys:set',
   'oc:keys:delete',
-  'oc:keys:test'
+  'oc:keys:test',
+  'oc:live:start',
+  'oc:live:stop',
+  'oc:nanogpt:models',
+  'oc:nanogpt:refresh',
+  'oc:nanogpt:usage',
+  'oc:nanogpt:generate',
+  'oc:nanogpt:images:list',
+  'oc:nanogpt:images:read',
+  'oc:nanogpt:images:delete'
 ] as const
+
+/** Sizes the image endpoint is asked for. An allowlist — `size` is forwarded to a paid API. */
+const IMAGE_SIZES: ReadonlySet<string> = new Set([
+  '256x256', '512x512', '768x768', '1024x1024',
+  '1024x1536', '1536x1024', '1024x1792', '1792x1024'
+])
+
+const MAX_IMAGE_PROMPT = 4000
+const MAX_IMAGE_COUNT = 4
+
+/**
+ * Models with a generation currently in flight.
+ *
+ * The `balanceBilled` guard can only reject a model whose billing is already KNOWN, and billing only
+ * becomes known when a generation returns. Two concurrent calls on an untested model would therefore
+ * both pass the guard and both spend — a window as wide as a full generation (up to 120s), not a
+ * narrow one. Serialising per model means the second call sees the first call's verdict.
+ */
+const generationsInFlight = new Set<string>()
 
 /** Result item for `oc:search:chats`. Kept structurally identical to the preload `ChatSearchHit`. */
 export type ChatSearchHit = {
@@ -165,6 +234,39 @@ function requireObject(value: unknown, name: string): Record<string, unknown> {
 function requirePermissionResponse(value: unknown): PermissionResponse {
   if (value === 'once' || value === 'always' || value === 'reject') return value
   throw new Error(`Invalid permission response: ${String(value)}`)
+}
+
+/** Maximum entries in a per-request tool policy — well above any legitimate use. */
+const MAX_TOOL_POLICY_KEYS = 64
+
+/**
+ * Validate an optional per-request tool policy for `promptAsync`.
+ *
+ * Every key lands in the agent's tool registry, so this is an allowlisted character class rather than
+ * a blocklist: lowercase identifiers only, booleans only, bounded size. Returns undefined when absent
+ * so the body field is omitted entirely and default tool behaviour is untouched.
+ */
+function optionalToolPolicy(value: unknown): Record<string, boolean> | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid IPC argument: tools must be an object of boolean flags.')
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+  if (entries.length === 0) return undefined
+  if (entries.length > MAX_TOOL_POLICY_KEYS) {
+    throw new Error(`Invalid IPC argument: tools may not exceed ${MAX_TOOL_POLICY_KEYS} entries.`)
+  }
+  const policy: Record<string, boolean> = {}
+  for (const [key, flag] of entries) {
+    if (!/^[a-z_][a-z0-9_]{0,63}$/.test(key)) {
+      throw new Error(`Invalid IPC argument: "${key}" is not a valid tool name.`)
+    }
+    if (typeof flag !== 'boolean') {
+      throw new Error(`Invalid IPC argument: tools.${key} must be a boolean.`)
+    }
+    policy[key] = flag
+  }
+  return policy
 }
 
 /* ------------------------------------------------------------------ */
@@ -342,6 +444,11 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
       ? args.parts
       : [{ type: 'text' as const, text }]
 
+    // Optional per-request tool policy. Used by compare runs to disable every mutating tool so N
+    // concurrent columns cannot race on one working tree. Validated rather than forwarded: keys reach
+    // the agent's tool registry, so only conservative identifiers are accepted.
+    const tools = optionalToolPolicy(args.tools)
+
     await requireAuthorizedModel(providerID, modelID)
     await call<void>(
       getClient().session.promptAsync({
@@ -349,7 +456,8 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
         query: { directory },
         body: {
           model: { providerID, modelID },
-          parts
+          parts,
+          ...(tools ? { tools } : {})
         }
       })
     )
@@ -633,6 +741,15 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
       const args = requireObject(argsArg, 'saveFile args')
       const defaultName = requireString(args.defaultName, 'defaultName')
       const content = requireString(args.content, 'content')
+      // Optional and defaulting to utf8, so every existing caller is unaffected. base64 exists so
+      // generated PNGs can be saved as bytes rather than being mangled into text.
+      let encoding: 'utf8' | 'base64' = 'utf8'
+      if (args.encoding !== undefined) {
+        if (args.encoding !== 'utf8' && args.encoding !== 'base64') {
+          throw new Error('Invalid IPC argument: encoding must be "utf8" or "base64".')
+        }
+        encoding = args.encoding
+      }
       const ext = defaultName.includes('.') ? defaultName.split('.').pop()! : 'txt'
       const win = BrowserWindow.getFocusedWindow()
       const options = {
@@ -644,7 +761,11 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
         ? await dialog.showSaveDialog(win, options)
         : await dialog.showSaveDialog(options)
       if (canceled || !filePath) return false
-      await writeFile(filePath, content, 'utf8')
+      if (encoding === 'base64') {
+        await writeFile(filePath, Buffer.from(content, 'base64'))
+      } else {
+        await writeFile(filePath, content, 'utf8')
+      }
       return true
     }
   )
@@ -754,10 +875,152 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
       return testKey(providerID)
     }
   )
+
+  /* ---------------------------------------------------------------- */
+  /* NanoGPT — subscription catalogue + quota                          */
+  /* The API key never crosses IPC; main reads it from the BYOK store. */
+  /* ---------------------------------------------------------------- */
+
+  ipcMain.handle('oc:nanogpt:models', (): NanogptModelsResult => {
+    const cache = readCache()
+    return {
+      chat: cache.chat,
+      image: cache.image,
+      balanceBilled: cache.balanceBilled,
+      fetchedAt: cache.fetchedAt
+    }
+  })
+
+  ipcMain.handle('oc:nanogpt:refresh', (): Promise<RefreshResult> => refreshCatalogs())
+
+  ipcMain.handle('oc:nanogpt:usage', (): Promise<NanoUsage> => fetchSubscriptionUsage())
+
+  /**
+   * Generate one or more images. This handler SPENDS MONEY, so every argument is validated against
+   * an allowlist rather than forwarded: `model` must be a member of the cached catalogue (no
+   * arbitrary passthrough to a paid endpoint), `size` must be a known size, and counts are capped.
+   */
+  ipcMain.handle('oc:nanogpt:generate', async (_event, argsArg: unknown): Promise<NanogptGenerateResult> => {
+    const args = requireObject(argsArg, 'generate args')
+
+    const prompt = requireString(args.prompt, 'prompt').trim()
+    if (prompt.length > MAX_IMAGE_PROMPT) {
+      throw new Error(`Prompt is too long (${prompt.length} characters; the limit is ${MAX_IMAGE_PROMPT}).`)
+    }
+
+    const model = requireString(args.model, 'model')
+    const cache = readCache()
+    if (!cache.image.some((entry) => entry.id === model)) {
+      throw new Error(
+        `Unknown image model "${model}". Refresh the NanoGPT model list under Providers first.`
+      )
+    }
+
+    let count = 1
+    if (args.n !== undefined) {
+      if (typeof args.n !== 'number' || !Number.isInteger(args.n) || args.n < 1 || args.n > MAX_IMAGE_COUNT) {
+        throw new Error(`Invalid IPC argument: n must be an integer between 1 and ${MAX_IMAGE_COUNT}.`)
+      }
+      count = args.n
+    }
+
+    let size: string | undefined
+    if (args.size !== undefined) {
+      const requested = requireString(args.size, 'size')
+      if (!IMAGE_SIZES.has(requested)) {
+        throw new Error(`Unsupported image size "${requested}".`)
+      }
+      size = requested
+    }
+
+    const sessionID = typeof args.sessionID === 'string' && args.sessionID.length > 0 ? args.sessionID : null
+    // Explicit, per-call consent to spend balance. Never defaults to true.
+    const allowBalance = args.allowBalance === true
+
+    // Refuse up front for a model already known to bill balance, unless the user opted in for this
+    // call. The first generation on an unseen model cannot be pre-checked — that is the probe.
+    const subscriptionOnly = options.appSettings
+      ? options.appSettings.get().settings.nanogptSubscriptionOnly
+      : true
+    if (subscriptionOnly && !allowBalance && cache.balanceBilled.includes(model)) {
+      throw new Error(
+        `"${model}" bills your NanoGPT balance, not your subscription. Turn off "Subscription images only" in Settings, or pick a different model.`
+      )
+    }
+
+    // Refuse a second concurrent generation on the same model — see `generationsInFlight`. Without
+    // this, two calls on an untested model both pass the guard above and both spend before either
+    // reports its `paymentSource`.
+    if (generationsInFlight.has(model)) {
+      throw new Error(`A generation with "${model}" is already running. Wait for it to finish.`)
+    }
+    generationsInFlight.add(model)
+
+    let result: Awaited<ReturnType<typeof generateImage>>
+    try {
+      result = await generateImage({ model, prompt, n: count, ...(size ? { size } : {}) })
+    } finally {
+      generationsInFlight.delete(model)
+    }
+
+    const billing = classifyBilling(result.paymentSource)
+
+    // Re-read rather than reusing the pre-await snapshot: the cache is on disk and this await was
+    // long. Only the blacklist bookkeeping depends on it, but a stale read here would return a wrong
+    // `blacklisted` flag to the UI.
+    let blacklisted = false
+    if (billing === 'balance' && !readCache().balanceBilled.includes(model)) {
+      markBalanceBilled(model)
+      blacklisted = true
+    }
+
+    const images = result.images.map((image) => ({
+      meta: saveImage({
+        base64: image.b64,
+        sessionID,
+        prompt,
+        model,
+        ...(size ? { size } : {}),
+        ...(result.paymentSource !== undefined ? { paymentSource: result.paymentSource } : {}),
+        ...(result.cost !== undefined ? { cost: result.cost } : {})
+      }),
+      base64: image.b64
+    }))
+
+    return {
+      images,
+      billing,
+      route: result.route,
+      blacklisted,
+      ...(result.paymentSource !== undefined ? { paymentSource: result.paymentSource } : {}),
+      ...(result.cost !== undefined ? { cost: result.cost } : {}),
+      ...(result.remainingBalance !== undefined ? { remainingBalance: result.remainingBalance } : {})
+    }
+  })
+
+  ipcMain.handle('oc:nanogpt:images:list', (_event, sessionArg: unknown): GeneratedImageMeta[] => {
+    // Drop entries whose file vanished so the gallery never renders a broken tile.
+    reconcile()
+    const sessionID = optionalString(sessionArg)
+    return sessionID === undefined ? listImages() : listImages(sessionID)
+  })
+
+  ipcMain.handle('oc:nanogpt:images:read', (_event, idArg: unknown): string | null =>
+    readImage(requireString(idArg, 'id'))
+  )
+
+  ipcMain.handle('oc:nanogpt:images:delete', (_event, idArg: unknown): void =>
+    deleteImage(requireString(idArg, 'id'))
+  )
+
+  ipcMain.handle('oc:live:start', (event): Promise<void> => startGeminiLive(event.sender))
+  ipcMain.handle('oc:live:stop', (event): void => stopGeminiLive(event.sender.id))
+  ipcMain.on('oc:live:send', (event, input: GeminiLiveInput): void => sendGeminiLive(event.sender.id, input))
 }
 
 
 /** Remove every handler this module registered. */
 export function unregisterIpc(): void {
   for (const channel of CHANNELS) ipcMain.removeHandler(channel)
+  ipcMain.removeAllListeners('oc:live:send')
 }

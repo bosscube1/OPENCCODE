@@ -39,6 +39,11 @@ export type PromptArgs = {
   modelID: string
   text: string
   parts?: PromptPart[]
+  /**
+   * Per-request tool policy. Compare runs pass `{ write: false, edit: false, … }` so N concurrent
+   * columns cannot race on one working tree. Omit for normal chat.
+   */
+  tools?: Record<string, boolean>
 }
 
 export type PermissionReplyArgs = {
@@ -129,6 +134,11 @@ export type McpSnapshot = {
 export type AppSettings = {
   closeToTray: boolean
   globalShortcut: string
+  showPaidModels: boolean
+  ttftMs: number
+  stallMs: number
+  /** Refuse NanoGPT image generation on models observed to bill balance. Default true. */
+  nanogptSubscriptionOnly: boolean
 }
 export type AppSettingsResult = {
   settings: AppSettings
@@ -140,6 +150,88 @@ export type UpdateStatus =
   | { state: 'available'; version: string }
   | { state: 'progress'; percent: number }
   | { state: 'error'; message: string }
+export type GeminiLiveInput = {
+  audio?: { data: string; mimeType: 'audio/pcm;rate=16000' }
+  video?: { data: string; mimeType: 'image/jpeg' }
+  text?: string
+}
+export type GeminiLiveEvent =
+  | { type: 'message'; data: unknown }
+  | { type: 'error'; message: string }
+  | { type: 'closed'; code: number; reason: string }
+
+/* --- NanoGPT (subscription provider + image sidecar) ---------------------- */
+
+export type NanoChatModel = {
+  id: string
+  name?: string
+  description?: string
+  context_length?: number
+  max_output_tokens?: number
+  capabilities?: { vision?: boolean; tool_calling?: boolean }
+}
+export type NanoImageModel = {
+  id: string
+  name?: string
+  description?: string
+  pricing?: unknown
+  supported_parameters?: string[]
+  tags?: string[]
+}
+export type NanogptModelsResult = {
+  chat: NanoChatModel[]
+  image: NanoImageModel[]
+  /** Image model ids observed to bill balance rather than the subscription. */
+  balanceBilled: string[]
+  fetchedAt: number
+}
+export type NanogptRefreshResult = {
+  chatCount: number
+  imageCount: number
+  /** True when the chat model set changed — the OpenCode server must restart to see it. */
+  restartRequired: boolean
+  fetchedAt: number
+}
+export type NanoUsage = {
+  active: boolean
+  limits: { daily: number; monthly: number }
+  enforceDailyLimit?: boolean
+  daily: { used: number; remaining: number; percentUsed: number; resetAt: number }
+  monthly: { used: number; remaining: number; percentUsed: number; resetAt: number }
+  state: string
+  graceUntil?: string | null
+}
+export type GeneratedImageMeta = {
+  id: string
+  sessionID: string | null
+  prompt: string
+  model: string
+  size?: string
+  paymentSource?: string
+  cost?: number
+  createdAt: number
+  bytes: number
+}
+export type NanogptGenerateArgs = {
+  prompt: string
+  model: string
+  n?: number
+  size?: string
+  /** Attach the generation to a chat session so the transcript can be rehydrated. */
+  sessionID?: string
+  /** Explicit per-call consent to bill the pay-as-you-go balance. Never defaults to true. */
+  allowBalance?: boolean
+}
+export type NanogptGenerateResult = {
+  images: Array<{ meta: GeneratedImageMeta; base64: string }>
+  billing: 'subscription' | 'balance' | 'unknown'
+  paymentSource?: string
+  cost?: number
+  remainingBalance?: number
+  route: 'subscription' | 'standard'
+  /** True when this call caused the model to be recorded as balance-billing. */
+  blacklisted: boolean
+}
 
 export interface OpencodeApi {
   status(): Promise<ServerStatus>
@@ -194,6 +286,28 @@ export interface OpencodeApi {
     remove(providerID: string): Promise<void>
     test(providerID: string): Promise<{ ok: boolean; status?: number; detail?: string }>
   }
+  live: {
+    start(): Promise<void>
+    send(input: GeminiLiveInput): void
+    stop(): Promise<void>
+    onMessage(cb: (event: GeminiLiveEvent) => void): () => void
+  }
+  nanogpt: {
+    /** Cached catalogues — no network call. */
+    models(): Promise<NanogptModelsResult>
+    /** Re-fetch both catalogues from NanoGPT and rewrite the cache. */
+    refresh(): Promise<NanogptRefreshResult>
+    usage(): Promise<NanoUsage>
+    /** Generate images. Throws when the model is known to bill balance and consent was not given. */
+    generate(a: NanogptGenerateArgs): Promise<NanogptGenerateResult>
+    images: {
+      /** Metadata only — call `read` for the bytes. Omit sessionID for the whole gallery. */
+      list(sessionID?: string): Promise<GeneratedImageMeta[]>
+      /** Base64 PNG bytes, or null when the file is gone. */
+      read(id: string): Promise<string | null>
+      remove(id: string): Promise<void>
+    }
+  }
   messages(directory: string, sessionID: string): Promise<MessageWithParts[]>
   revertMessage(a: RevertArgs): Promise<void>
   searchChats(directory: string, query: string): Promise<ChatSearchHit[]>
@@ -204,7 +318,8 @@ export interface OpencodeApi {
   openExternal(url: string): Promise<void>
   pathForFile(file: File): string
   exportChat(defaultName: string, content: string): Promise<boolean>
-  saveFile(a: { defaultName: string; content: string }): Promise<boolean>
+  /** `encoding` defaults to 'utf8'; pass 'base64' to write bytes (e.g. a generated PNG). */
+  saveFile(a: { defaultName: string; content: string; encoding?: 'utf8' | 'base64' }): Promise<boolean>
   /** Registers an SSE listener; call the returned function to unsubscribe. */
   onEvent(cb: (e: OcEvent) => void): () => void
   /** Registers a server-status listener; call the returned function to unsubscribe. */

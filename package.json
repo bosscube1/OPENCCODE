@@ -1,6 +1,6 @@
 {
   "name": "opencode-desktop",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Claude-Code-style desktop GUI powered by OpenCode — any model provider",
   "main": "./out/main/index.js",
   "author": "",
@@ -22,6 +22,7 @@
     "dist:win:dir": "electron-vite build && electron-builder --win --dir"
   },
   "dependencies": {
+    "@google/genai": "^2.13.0",
     "@opencode-ai/sdk": "^1.18.4",
     "electron-updater": "^6.8.9",
     "highlight.js": "^11.11.1"

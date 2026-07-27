@@ -2,6 +2,14 @@
 node_modules/
 .pnpm-store/
 
+# build output — electron-vite bundles into out/, electron-builder into dist*/release/
+out/
+dist/
+dist-*/
+release/
+
+# agent scratch
+.claude-octopus/
 
 # typescript incremental / project-reference state
 *.tsbuildinfo
@@ -28,11 +36,6 @@ logs/
 .DS_Store
 Thumbs.db
 desktop.ini
-
-# build outputs
-out/
-dist/
-release/
 
 # caches
 .cache/

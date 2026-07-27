@@ -3,6 +3,7 @@ import type { JSX } from 'react'
 import type { Session } from '@opencode-ai/sdk'
 import { useStore } from '../lib/store'
 import { relativeTime, shortPath } from '../lib/format'
+import { isCompareSessionTitle } from '../lib/compare'
 import { ModelPicker } from './ModelPicker'
 import { ProviderPanel } from './ProviderPanel'
 
@@ -21,7 +22,7 @@ function fullStamp(ms: number): string {
   return new Date(ms).toLocaleString()
 }
 
-export function Sidebar(): JSX.Element {
+export function Sidebar({ onOpenLiveScreen }: { onOpenLiveScreen?: () => void }): JSX.Element {
   const directory = useStore((s) => s.directory)
   const sessions = useStore((s) => s.sessions)
   const activeSessionID = useStore((s) => s.activeSessionID)
@@ -41,6 +42,7 @@ export function Sidebar(): JSX.Element {
   const [searchQuery, setSearchQuery] = useState('')
   const [editingSessionID, setEditingSessionID] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState('')
+  const [showCompareRuns, setShowCompareRuns] = useState(false)
 
   /* keep relative timestamps honest without a per-second re-render */
   useEffect(() => {
@@ -59,15 +61,24 @@ export function Sidebar(): JSX.Element {
     if (confirmID !== null && !sessions.some((s) => s.id === confirmID)) setConfirmID(null)
   }, [sessions, confirmID])
 
+  const compareCount = useMemo(
+    () => sessions.filter((s) => !s.parentID && isCompareSessionTitle(s.title)).length,
+    [sessions]
+  )
+
   const ordered = useMemo(() => {
     void tick
     let res = sessions.filter((s) => !s.parentID)
+    // Compare runs create one real session per column, which would otherwise bury the user's own
+    // chats. Hidden by default behind the toggle below rather than deleted, so a run stays
+    // recoverable.
+    if (!showCompareRuns) res = res.filter((s) => !isCompareSessionTitle(s.title))
     if (searchQuery.trim()) {
       const lower = searchQuery.trim().toLowerCase()
       res = res.filter((s) => (s.title || 'Untitled').toLowerCase().includes(lower))
     }
     return res.sort((a, b) => stamp(b) - stamp(a))
-  }, [sessions, tick, searchQuery])
+  }, [sessions, tick, searchQuery, showCompareRuns])
 
   const commitRename = useCallback(
     (id: string) => {
@@ -119,6 +130,8 @@ export function Sidebar(): JSX.Element {
           <div className="sidebar__nav">
             <button type="button" className={activeView === 'chats' ? 'sidebar__nav-item sidebar__nav-item--active' : 'sidebar__nav-item'} onClick={() => setActiveView('chats')}>Chats</button>
             <button type="button" className={activeView === 'projects' ? 'sidebar__nav-item sidebar__nav-item--active' : 'sidebar__nav-item'} onClick={() => setActiveView('projects')}>Projects</button>
+            <button type="button" className={activeView === 'images' ? 'sidebar__nav-item sidebar__nav-item--active' : 'sidebar__nav-item'} onClick={() => setActiveView('images')}>Images</button>
+            <button type="button" className="sidebar__nav-item" onClick={onOpenLiveScreen}>Live screen</button>
           </div>
 
           <button
@@ -158,6 +171,8 @@ export function Sidebar(): JSX.Element {
           <div className="sidebar__nav">
             <button type="button" className={activeView === 'chats' ? 'sidebar__nav-item sidebar__nav-item--active' : 'sidebar__nav-item'} onClick={() => setActiveView('chats')}>Chats</button>
             <button type="button" className={activeView === 'projects' ? 'sidebar__nav-item sidebar__nav-item--active' : 'sidebar__nav-item'} onClick={() => setActiveView('projects')}>Projects</button>
+            <button type="button" className={activeView === 'images' ? 'sidebar__nav-item sidebar__nav-item--active' : 'sidebar__nav-item'} onClick={() => setActiveView('images')}>Images</button>
+            <button type="button" className="sidebar__nav-item" onClick={onOpenLiveScreen}>Live screen</button>
           </div>
 
           <button
@@ -185,6 +200,19 @@ export function Sidebar(): JSX.Element {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
+            {compareCount > 0 && (
+              <label
+                className="sidebar__compare-toggle"
+                title="Compare runs create one session per model column"
+              >
+                <input
+                  type="checkbox"
+                  checked={showCompareRuns}
+                  onChange={(e) => setShowCompareRuns(e.target.checked)}
+                />
+                Show {compareCount} compare session{compareCount === 1 ? '' : 's'}
+              </label>
+            )}
           </div>
 
           <div className="sidebar__list">
