@@ -1,0 +1,154 @@
+/* ==========================================================================
+   panels.css — shared right-panel chrome
+   Namespace: .panel
+   Holds tab strip, resizer, empty states, and action toolbar — not individual
+   panel internals (editor, git, terminal, file tree are other workstreams)
+   ========================================================================== */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-alt);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+
+/* --------------------------------------------------------------------------
+   Tab strip
+   -------------------------------------------------------------------------- */
+
+.panel__tabs {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-alt);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.panel__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  margin-bottom: -1px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 110ms ease, border-bottom-color 110ms ease;
+}
+
+.panel__tab:hover {
+  color: var(--fg);
+}
+
+.panel__tab--active {
+  border-bottom-color: var(--accent);
+  color: var(--fg);
+  font-weight: 580;
+}
+
+/* --------------------------------------------------------------------------
+   Content body (scrollable region)
+   -------------------------------------------------------------------------- */
+
+.panel__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px;
+  background: var(--bg);
+}
+
+/* --------------------------------------------------------------------------
+   Panel resizer (left edge handle for dragging width)
+   -------------------------------------------------------------------------- */
+
+.panel__resizer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 120ms ease;
+  z-index: 10;
+}
+
+.panel__resizer:hover,
+.panel__resizer:active {
+  background: var(--accent);
+}
+
+/* --------------------------------------------------------------------------
+   Empty state (centered message when no content)
+   -------------------------------------------------------------------------- */
+
+.panel__empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px 18px;
+  text-align: center;
+  color: var(--fg-dim);
+  font-size: 12.5px;
+}
+
+/* --------------------------------------------------------------------------
+   Toolbar (compact action row)
+   -------------------------------------------------------------------------- */
+
+.panel__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-alt);
+}
+
+.panel__toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-inset);
+  color: var(--fg);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 110ms ease, border-color 110ms ease;
+}
+
+.panel__toolbar-btn:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: var(--fg-dim);
+}
+
+.panel__toolbar-btn:active:not(:disabled) {
+  background: var(--press);
+}
+
+.panel__toolbar-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

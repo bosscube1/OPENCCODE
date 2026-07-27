@@ -3,6 +3,8 @@ import type { ReactNode } from 'react'
 import type { ToolPart, ToolState } from '../lib/types'
 import { formatDuration } from '../lib/format'
 import { highlightCode } from '../lib/highlight'
+import { findFileRefs } from '../lib/filelinks'
+import { useStore } from '../lib/store'
 
 /* ------------------------------------------------------------------ *
  * Defensive narrowing. `input` is Record<string, unknown> — never cast.
@@ -92,12 +94,79 @@ const TOOL_ICON: Record<ToolKind, string> = {
 const FILE_KEYS = ['filePath', 'file_path', 'path', 'file', 'target'] as const
 
 /* ------------------------------------------------------------------ *
+ * Clickable file references
+ *
+ * Detected refs (see lib/filelinks.ts) are spliced into the text as inline buttons that open the
+ * user's real external editor via window.api.openEditor — no in-app file viewer round trip.
+ * ------------------------------------------------------------------ */
+
+const FILE_LINK_STYLE = {
+  color: 'var(--accent)',
+  textDecoration: 'underline',
+  cursor: 'pointer',
+  background: 'none',
+  border: 'none',
+  padding: 0,
+  font: 'inherit'
+} as const
+
+/**
+ * `window.api.openEditor` (CONTRACTS.md "Phase 1 — Code surface") is wired into the real preload
+ * bridge by a separate workstream (`src/preload/index.ts` / `index.d.ts`, both out of scope
+ * here). This narrow, local type lets the renderer call it — and typecheck — ahead of that
+ * integration landing; delete the cast once `openEditor` is a real member of `OpencodeApi`.
+ */
+type ApiWithOpenEditor = {
+  openEditor(args: { path: string; line?: number; column?: number }): Promise<void>
+}
+
+function openInEditor(path: string, line?: number, column?: number): void {
+  const api = window.api as unknown as ApiWithOpenEditor
+  void api.openEditor({ path, line, column }).catch(() => {
+    // Best-effort: the user's editor may not be installed, or the path may no longer be
+    // contained in the active project. Silently ignored — this is a convenience link, not a
+    // required action.
+  })
+}
+
+function LinkifiedText({ text, directory }: { text: string; directory: string }): ReactNode {
+  if (!directory) return text
+  const refs = findFileRefs(text, directory)
+  if (refs.length === 0) return text
+
+  const nodes: ReactNode[] = []
+  let cursor = 0
+  refs.forEach((ref, index) => {
+    if (ref.start > cursor) nodes.push(text.slice(cursor, ref.start))
+    const label = text.slice(ref.start, ref.end)
+    const suffix = ref.line !== undefined ? `:${ref.line}${ref.column !== undefined ? `:${ref.column}` : ''}` : ''
+    nodes.push(
+      <button
+        key={`fileref-${index}-${ref.start}`}
+        type="button"
+        style={FILE_LINK_STYLE}
+        title={`Open ${ref.path}${suffix} in your editor`}
+        onClick={(event) => {
+          event.stopPropagation()
+          openInEditor(ref.path, ref.line, ref.column)
+        }}
+      >
+        {label}
+      </button>
+    )
+    cursor = ref.end
+  })
+  if (cursor < text.length) nodes.push(text.slice(cursor))
+  return nodes
+}
+
+/* ------------------------------------------------------------------ *
  * Clamped preformatted output
  * ------------------------------------------------------------------ */
 
 const CLAMP_LINES = 40
 
-function Clamp({ text, tone }: { text: string; tone?: 'error' }): ReactNode {
+function Clamp({ text, tone, directory }: { text: string; tone?: 'error'; directory: string }): ReactNode {
   const [expanded, setExpanded] = useState(false)
   const lines = text.split('\n')
   const overflowing = lines.length > CLAMP_LINES
@@ -106,7 +175,9 @@ function Clamp({ text, tone }: { text: string; tone?: 'error' }): ReactNode {
 
   return (
     <>
-      <pre className={cls}>{shown}</pre>
+      <pre className={cls}>
+        <LinkifiedText text={shown} directory={directory} />
+      </pre>
       {overflowing ? (
         <button
           type="button"
@@ -269,7 +340,7 @@ function Labelled({ label, value }: { label: string; value: string }): ReactNode
   )
 }
 
-function ToolBody({ part }: { part: ToolPart }): ReactNode {
+function ToolBody({ part, directory }: { part: ToolPart; directory: string }): ReactNode {
   const { state } = part
   const input = stateInput(state)
   const metadata = stateMetadata(state)
@@ -287,7 +358,7 @@ function ToolBody({ part }: { part: ToolPart }): ReactNode {
       </div>
     )
     if (raw && Object.keys(input).length === 0) {
-      sections.push(<Clamp key="raw" text={raw} />)
+      sections.push(<Clamp key="raw" text={raw} directory={directory} />)
     }
   }
 
@@ -315,9 +386,25 @@ function ToolBody({ part }: { part: ToolPart }): ReactNode {
       const file = firstString(input, FILE_KEYS)
       if (file) {
         sections.push(
-          <div className="tool__path" key="path" title={file}>
-            {file}
-          </div>
+          directory ? (
+            <button
+              key="path"
+              type="button"
+              className="tool__path"
+              style={{ ...FILE_LINK_STYLE, display: 'block', textAlign: 'left' }}
+              title={`Open ${file} in your editor`}
+              onClick={(event) => {
+                event.stopPropagation()
+                openInEditor(file)
+              }}
+            >
+              {file}
+            </button>
+          ) : (
+            <div className="tool__path" key="path" title={file}>
+              {file}
+            </div>
+          )
         )
       }
 
@@ -348,7 +435,7 @@ function ToolBody({ part }: { part: ToolPart }): ReactNode {
 
       if (kind === 'write') {
         const content = asString(input.content)
-        if (content) sections.push(<Clamp key="content" text={content} />)
+        if (content) sections.push(<Clamp key="content" text={content} directory={directory} />)
       }
       break
     }
@@ -390,22 +477,22 @@ function ToolBody({ part }: { part: ToolPart }): ReactNode {
       const prompt = firstString(input, ['prompt'])
       if (description) sections.push(<Labelled key="desc" label="Task" value={description} />)
       if (agent) sections.push(<Labelled key="agent" label="Agent" value={agent} />)
-      if (prompt) sections.push(<Clamp key="prompt" text={prompt} />)
+      if (prompt) sections.push(<Clamp key="prompt" text={prompt} directory={directory} />)
       break
     }
 
     default: {
       if (Object.keys(input).length > 0) {
-        sections.push(<Clamp key="input" text={stringify(input)} />)
+        sections.push(<Clamp key="input" text={stringify(input)} directory={directory} />)
       }
       break
     }
   }
 
   if (error !== null) {
-    sections.push(<Clamp key="error" text={error} tone="error" />)
+    sections.push(<Clamp key="error" text={error} tone="error" directory={directory} />)
   } else if (output !== null && output.trim() !== '') {
-    sections.push(<Clamp key="output" text={output} />)
+    sections.push(<Clamp key="output" text={output} directory={directory} />)
   }
 
   if (sections.length === 0) {
@@ -425,6 +512,7 @@ function ToolBody({ part }: { part: ToolPart }): ReactNode {
 
 export function ToolCall({ part }: { part: ToolPart }): ReactNode {
   const [override, setOverride] = useState<boolean | null>(null)
+  const directory = useStore((state) => state.directory) ?? ''
 
   const status = part.state.status
   const autoOpen = status === 'running' || status === 'error'
@@ -454,7 +542,7 @@ export function ToolCall({ part }: { part: ToolPart }): ReactNode {
         {duration !== null ? <span className="tool__time">{formatDuration(duration)}</span> : null}
         <span className={`tool__dot tool__dot--${status}`} title={status} aria-label={status} />
       </button>
-      {open ? <ToolBody part={part} /> : null}
+      {open ? <ToolBody part={part} directory={directory} /> : null}
     </div>
   )
 }
