@@ -9,7 +9,16 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # Windows is the primary target: the app spawns `opencode.cmd`, reaps the
+    # child with `taskkill /T /F`, and encrypts BYOK keys through DPAPI via
+    # Electron `safeStorage`. None of that is exercised on Linux, so Windows
+    # is a first-class leg rather than a nightly afterthought.
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

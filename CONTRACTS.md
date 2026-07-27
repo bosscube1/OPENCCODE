@@ -924,6 +924,269 @@ Reserved right panel: `.app` grid has a 4th `panel` column, collapsed to `0px` w
 default. Adding the `.app--panel` class to the root `.app` element expands that column
 (currently unused — reserved for a future Artifacts panel). No component renders into it yet.
 
+## Phase 1 — Code surface (fs / git / terminal / editor deep-links)
+
+Adds a review surface: a scoped file tree, a Monaco diff panel with hunk-level accept/reject, a
+real terminal, and a git panel. **This is a review surface, not an IDE** — single-file editing,
+no multi-tab workspace, no debugger. Anything beyond reviewing and steering agent output is out
+of scope.
+
+**Process ownership is unchanged.** All filesystem, git and PTY work happens in **main**. The
+renderer never touches `node:fs`, never shells out, and never holds a PTY handle.
+
+**Module registration pattern (new).** Each new main-process service exports
+`register(ipc: IpcMain): void` and owns its own handlers. `ipc.ts` calls `register()` once per
+service and adds the channel names to `CHANNELS`. Services never import each other.
+
+```ts
+// src/main/fsService.ts, gitService.ts, terminal.ts
+export function register(ipc: IpcMain): void
+```
+
+### Shared types (exported from `src/preload/index.ts`, importable by the renderer)
+
+```ts
+export type GitFileStatus =
+  | 'untracked' | 'modified' | 'added' | 'deleted' | 'renamed' | 'conflicted' | 'ignored'
+
+export type FileNode = {
+  name: string
+  path: string                  // POSIX-separated, ALWAYS relative to the session directory
+  kind: 'file' | 'dir'
+  gitStatus: GitFileStatus | null
+  touched: boolean              // edited by the agent during this session
+}
+
+export type FileContent = {
+  path: string
+  text: string
+  bytes: number
+  truncated: boolean            // true when the file exceeded MAX_READ_BYTES
+  sha: string                   // sha256 of the on-disk bytes; the concurrency token
+  language: string | null       // Monaco language id, inferred from extension
+}
+
+export type DiffLine = { kind: 'ctx' | 'add' | 'del'; text: string }
+
+export type Hunk = {
+  id: string                    // stable within one FileDiff: `${oldStart}-${newStart}`
+  header: string                // "@@ -a,b +c,d @@"
+  oldStart: number; oldLines: number
+  newStart: number; newLines: number
+  lines: DiffLine[]
+}
+
+export type FileDiff = {
+  path: string
+  oldPath?: string              // set on renames
+  binary: boolean               // when true, `hunks` is empty
+  hunks: Hunk[]
+}
+
+export type GitStatusEntry = {
+  path: string
+  index: GitFileStatus | null       // staged side
+  worktree: GitFileStatus | null    // unstaged side
+  renamedFrom?: string
+}
+
+export type GitStatus = {
+  branch: string
+  upstream: string | null
+  ahead: number
+  behind: number
+  entries: GitStatusEntry[]
+  clean: boolean
+}
+
+export type GitBranch = { name: string; current: boolean; remote: boolean }
+
+export type TermId = string
+```
+
+### Invoke channels
+
+```ts
+// --- filesystem (src/main/fsService.ts) ---
+'oc:fs:tree'    (args: { directory: string; path?: string; depth?: number }) => FileNode[]
+                // LAZY, one level by default (depth 1, max 3). Never a full recursive walk —
+                // a 200k-file repo must not block the main process. Sorted dirs-first, then
+                // name. Honours .gitignore.
+'oc:fs:read'    (args: { directory: string; path: string }) => FileContent
+                // Refuses binaries (NUL byte in the first 8 KB). Truncates past MAX_READ_BYTES
+                // (2 MiB) and sets `truncated`.
+'oc:fs:write'   (args: { directory: string; path: string; text: string; baseSha: string })
+                  => { sha: string }
+                // Optimistic concurrency: THROWS if the on-disk sha256 !== baseSha, so an
+                // in-flight agent edit is never silently clobbered by the editor panel.
+                // Renderer catches and offers reload-or-overwrite.
+
+// --- git (src/main/gitService.ts) ---
+'oc:git:status'     (directory: string) => GitStatus
+'oc:git:diff'       (args: { directory: string; path: string; staged?: boolean }) => FileDiff
+'oc:git:stage'      (args: { directory: string; paths: string[] }) => GitStatus
+'oc:git:unstage'    (args: { directory: string; paths: string[] }) => GitStatus
+'oc:git:stageHunks' (args: { directory: string; path: string; patch: string }) => GitStatus
+                    // `patch` is a unified diff built in the renderer by lib/hunks.ts and
+                    // applied with `git apply --cached -` over stdin.
+'oc:git:commit'     (args: { directory: string; message: string; amend?: boolean })
+                      => { sha: string }
+'oc:git:branches'   (directory: string) => GitBranch[]
+'oc:git:checkout'   (args: { directory: string; branch: string; create?: boolean }) => GitStatus
+'oc:git:remoteUrl'  (directory: string) => string | null   // normalised https URL, for PR links
+
+// --- terminal (src/main/terminal.ts) ---
+'oc:term:start'  (args: { directory: string; cols: number; rows: number }) => { id: TermId }
+'oc:term:write'  (args: { id: TermId; data: string }) => void
+'oc:term:resize' (args: { id: TermId; cols: number; rows: number }) => void
+'oc:term:kill'   (id: TermId) => void
+
+// --- external editor deep link ---
+'oc:openEditor'  (args: { path: string; line?: number; column?: number }) => void
+```
+
+### Send channels (main -> renderer)
+
+```ts
+'oc:term:data' ({ id: TermId; data: string })      // PTY output, base64-free UTF-8 chunks
+'oc:term:exit' ({ id: TermId; code: number })
+```
+
+### Preload bridge additions (`window.api`)
+
+```ts
+fs: {
+  tree(directory: string, path?: string, depth?: number): Promise<FileNode[]>
+  read(directory: string, path: string): Promise<FileContent>
+  write(a: { directory: string; path: string; text: string; baseSha: string }): Promise<{ sha: string }>
+}
+git: {
+  status(directory: string): Promise<GitStatus>
+  diff(a: { directory: string; path: string; staged?: boolean }): Promise<FileDiff>
+  stage(directory: string, paths: string[]): Promise<GitStatus>
+  unstage(directory: string, paths: string[]): Promise<GitStatus>
+  stageHunks(a: { directory: string; path: string; patch: string }): Promise<GitStatus>
+  commit(a: { directory: string; message: string; amend?: boolean }): Promise<{ sha: string }>
+  branches(directory: string): Promise<GitBranch[]>
+  checkout(a: { directory: string; branch: string; create?: boolean }): Promise<GitStatus>
+  remoteUrl(directory: string): Promise<string | null>
+}
+term: {
+  start(a: { directory: string; cols: number; rows: number }): Promise<{ id: TermId }>
+  write(id: TermId, data: string): Promise<void>
+  resize(id: TermId, cols: number, rows: number): Promise<void>
+  kill(id: TermId): Promise<void>
+  onData(cb: (e: { id: TermId; data: string }) => void): () => void
+  onExit(cb: (e: { id: TermId; code: number }) => void): () => void
+}
+openEditor(a: { path: string; line?: number; column?: number }): Promise<void>
+```
+
+### Security invariants — binding, not advisory
+
+1. **Path containment.** Every `path` arriving from the renderer is resolved against the session
+   `directory` and validated with `assertSubpath` from `src/main/projectsPaths.ts`. **Reuse it —
+   do not write a second containment check.** It already rejects traversal, absolute escapes, the
+   base directory itself, and existing symlink/reparse-point segments.
+2. **No shell string interpolation for git.** Every git invocation uses an **argv array** through
+   `execFile`, never a concatenated command string and never `shell: true`. A branch named
+   `; rm -rf /` must be inert.
+3. **Never push, never force.** `gitService` exposes no push, no `--force`, no `reset --hard`, no
+   history rewriting beyond `commit --amend`. Those are user actions in a real terminal.
+4. **PTY confinement.** `oc:term:start` pins `cwd` to the validated session directory and builds
+   its environment through the existing `ALLOWLIST`/`ALIASES` in `src/main/env.ts` — a terminal
+   must not inherit decrypted BYOK keys. Every PTY is killed on window close and on app quit;
+   PTY handles are keyed per `WebContents` so a reload cannot orphan one.
+5. **`oc:openEditor` is scheme-allowlisted.** Only `vscode://`, `vscode-insiders://`, `cursor://`,
+   `jetbrains://` URLs are constructed, and only from a contained path. The renderer never passes
+   a URL — it passes a path, and main builds the URL. This prevents `shell.openExternal` becoming
+   an arbitrary-protocol gadget.
+6. **Write concurrency.** `oc:fs:write` is the only renderer-driven write path and is gated on
+   `baseSha`. The agent's own edits go through OpenCode's tools as before and are unaffected.
+7. **Output bounds.** `oc:fs:read` caps at 2 MiB; `oc:git:diff` caps at 5 000 lines per file and
+   sets `binary` rather than streaming blobs; PTY output is chunked and back-pressured.
+
+### Renderer modules
+
+```ts
+// src/renderer/src/lib/hunks.ts — PURE. No store, no React, no IPC. Fully unit-tested.
+export function parseUnifiedDiff(text: string): FileDiff
+export function selectedHunksToPatch(diff: FileDiff, hunkIds: string[]): string
+export function applyHunksToText(original: string, diff: FileDiff, hunkIds: string[]): string
+// applyHunksToText backs "accept some hunks" in the editor; selectedHunksToPatch backs
+// "stage some hunks" through git apply --cached. Both must agree on hunk identity.
+
+// src/renderer/src/lib/filelinks.ts — PURE.
+export function findFileRefs(text: string, directory: string): Array<{ path: string; line?: number; start: number; end: number }>
+// Recognises "src/foo.ts:42", "at src/foo.ts:42:7", and bare repo-relative paths. Used to
+// linkify tool output and stack traces. Must not match URLs or bare numbers.
+```
+
+### Store slices
+
+`store.ts` is split into slices under `src/renderer/src/lib/slices/` (see Phase 0). Phase 1 adds:
+
+```ts
+// fileTree slice
+treeRoot: FileNode[]; treeExpanded: Set<string>; treeLoading: boolean
+loadTree(path?: string): Promise<void>; toggleTreeDir(path: string): Promise<void>
+
+// editor slice
+openFile: FileContent | null; openFileDirty: boolean
+openFileDiff: FileDiff | null; acceptedHunkIds: string[]
+openPath(path: string, line?: number): Promise<void>
+toggleHunk(id: string): void; applyAcceptedHunks(): Promise<void>; closeFile(): void
+
+// git slice
+gitStatus: GitStatus | null; gitBranches: GitBranch[]
+refreshGit(): Promise<void>; stagePaths(paths: string[]): Promise<void>
+stageHunks(path: string, hunkIds: string[]): Promise<void>
+commit(message: string): Promise<void>; generateCommitMessage(): Promise<string>
+
+// terminal slice
+terminals: Array<{ id: TermId; title: string }>; activeTermID: TermId | null
+startTerminal(): Promise<void>; killTerminal(id: TermId): Promise<void>
+
+// ui slice
+panelTab: 'editor' | 'git' | 'terminal' | 'artifacts' | null   // null = panel collapsed
+setPanelTab(tab: AppState['panelTab']): void
+paletteOpen: boolean; setPaletteOpen(open: boolean): void
+```
+
+`refreshGit()` is debounced (300 ms) and is triggered by the existing `file.edited` SSE event —
+the agent editing a file must update the git panel without polling.
+
+### CSS namespaces
+
+New per-component stylesheets, imported from their own `.tsx`. No new global tokens beyond the
+two below; everything else reuses the existing token set.
+
+- `.tree`  → `src/renderer/src/components/tree.css`
+- `.editor` → `src/renderer/src/components/editor.css`
+- `.git`   → `src/renderer/src/components/git.css`
+- `.term`  → `src/renderer/src/components/term.css`
+- `.palette` → `src/renderer/src/components/palette.css`
+- `.panel` (shared panel chrome: tab strip, resizer, empty states) →
+  `src/renderer/src/components/panels.css`
+
+New global tokens (added to `index.css`):
+
+```
+--panel-w      default width of the right panel column when expanded (~34rem)
+--panel-min-w  minimum drag width (~22rem)
+```
+
+The reserved 4th `panel` grid column in `.app` becomes a **real, resizable, tabbed region**.
+`.app--panel` continues to expand it; the width is driven by `--panel-w`, persisted to prefs.
+
+### Dependencies added
+
+| Package | Used by | Risk |
+|---|---|---|
+| `monaco-editor` | editor panel | Large bundle; must be lazy-imported and locally bundled — no CDN (the renderer CSP forbids it). |
+| `xterm` + `xterm-addon-fit` | terminal UI | Low. |
+| `node-pty` | terminal backend | **HIGH — native module.** Requires a rebuild against Electron 43 ABI on Windows (ConPTY). This is spiked and go/no-go'd before any terminal UI work is scheduled. Fallback if it fails: a non-interactive `child_process` command runner with streamed output — degraded, but shippable, and the `oc:term:*` contract above is deliberately shaped so the fallback can satisfy it unchanged. |
+
 ## Conventions
 
 - TypeScript strict. No `any` in exported signatures (`any` inside event payload narrowing is fine).
