@@ -519,13 +519,6 @@ function normalizeDir(dir: string | null): string | null {
   return dir.replace(/[\\/]+/g, '/').replace(/\/+$/, '').toLowerCase()
 }
 
-/** The directory most recently scoped via `setEventDirectory` — the "active project" main
- * already tracks for the SSE subscription. Consumed by handlers (e.g. `oc:openEditor`) whose
- * renderer-facing arguments don't carry a `directory` of their own. */
-export function getEventDirectory(): string | null {
-  return eventDirectory
-}
-
 export function setEventDirectory(directory: string | null): void {
   if (normalizeDir(directory) === normalizeDir(eventDirectory)) return
   eventDirectory = directory

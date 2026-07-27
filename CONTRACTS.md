@@ -1042,7 +1042,7 @@ export type TermId = string
 'oc:term:kill'   (id: TermId) => void
 
 // --- external editor deep link ---
-'oc:openEditor'  (args: { path: string; line?: number; column?: number }) => void
+'oc:openEditor'  (args: { directory: string; path: string; line?: number; column?: number }) => void
 ```
 
 ### Send channels (main -> renderer)
@@ -1079,7 +1079,7 @@ term: {
   onData(cb: (e: { id: TermId; data: string }) => void): () => void
   onExit(cb: (e: { id: TermId; code: number }) => void): () => void
 }
-openEditor(a: { path: string; line?: number; column?: number }): Promise<void>
+openEditor(a: { directory: string; path: string; line?: number; column?: number }): Promise<void>
 ```
 
 ### Security invariants — binding, not advisory
@@ -1117,7 +1117,7 @@ export function applyHunksToText(original: string, diff: FileDiff, hunkIds: stri
 // "stage some hunks" through git apply --cached. Both must agree on hunk identity.
 
 // src/renderer/src/lib/filelinks.ts — PURE.
-export function findFileRefs(text: string, directory: string): Array<{ path: string; line?: number; start: number; end: number }>
+export function findFileRefs(text: string, directory: string): Array<{ path: string; line?: number; column?: number; start: number; end: number }>
 // Recognises "src/foo.ts:42", "at src/foo.ts:42:7", and bare repo-relative paths. Used to
 // linkify tool output and stack traces. Must not match URLs or bare numbers.
 ```

@@ -12,7 +12,6 @@
 import type { IpcMain } from 'electron'
 import { shell } from 'electron'
 import { assertSubpath } from './projectsPaths'
-import { getEventDirectory } from './server'
 
 /** Deep-link schemes this module is allowed to construct. Nothing else is ever produced. */
 const ALLOWED_SCHEMES = ['vscode', 'vscode-insiders', 'cursor'] as const
@@ -20,9 +19,10 @@ type EditorScheme = (typeof ALLOWED_SCHEMES)[number]
 
 const DEFAULT_SCHEME: EditorScheme = 'vscode'
 
-// `oc:openEditor`'s renderer-facing args carry no `directory` (see CONTRACTS.md) — main resolves
-// containment against the directory it already tracks for the active session's SSE subscription.
+// `oc:openEditor`'s renderer-facing args carry `directory`, like every other Phase 1 channel —
+// main resolves containment against the directory the renderer supplies, not a tracked global.
 export type OpenEditorArgs = {
+  directory: string
   path: string
   line?: number
   column?: number
@@ -78,11 +78,7 @@ function buildEditorUrl(scheme: EditorScheme, absPath: string, line?: number, co
  * trip (e.g. from a test, or from another main-process entry point).
  */
 export async function openEditor(args: OpenEditorArgs): Promise<void> {
-  const directory = getEventDirectory()
-  if (!directory) {
-    throw new Error('No active project directory — open a project before opening files in an editor.')
-  }
-  const absPath = assertSubpath(directory, args.path)
+  const absPath = assertSubpath(args.directory, args.path)
   const url = buildEditorUrl(DEFAULT_SCHEME, absPath, args.line, args.column)
   await shell.openExternal(url)
 }
@@ -91,9 +87,10 @@ export function register(ipc: IpcMain): void {
   ipc.removeHandler('oc:openEditor')
   ipc.handle('oc:openEditor', async (_event, argsArg: unknown): Promise<void> => {
     const args = requireObject(argsArg, 'openEditor args')
+    const directory = requireString(args.directory, 'directory')
     const path = requireString(args.path, 'path')
     const line = optionalPositiveInt(args.line, 'line')
     const column = optionalPositiveInt(args.column, 'column')
-    await openEditor({ path, line, column })
+    await openEditor({ directory, path, line, column })
   })
 }

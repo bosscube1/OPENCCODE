@@ -110,19 +110,8 @@ const FILE_LINK_STYLE = {
   font: 'inherit'
 } as const
 
-/**
- * `window.api.openEditor` (CONTRACTS.md "Phase 1 — Code surface") is wired into the real preload
- * bridge by a separate workstream (`src/preload/index.ts` / `index.d.ts`, both out of scope
- * here). This narrow, local type lets the renderer call it — and typecheck — ahead of that
- * integration landing; delete the cast once `openEditor` is a real member of `OpencodeApi`.
- */
-type ApiWithOpenEditor = {
-  openEditor(args: { path: string; line?: number; column?: number }): Promise<void>
-}
-
-function openInEditor(path: string, line?: number, column?: number): void {
-  const api = window.api as unknown as ApiWithOpenEditor
-  void api.openEditor({ path, line, column }).catch(() => {
+function openInEditor(directory: string, path: string, line?: number, column?: number): void {
+  void window.api.openEditor({ directory, path, line, column }).catch(() => {
     // Best-effort: the user's editor may not be installed, or the path may no longer be
     // contained in the active project. Silently ignored — this is a convenience link, not a
     // required action.
@@ -148,7 +137,7 @@ function LinkifiedText({ text, directory }: { text: string; directory: string })
         title={`Open ${ref.path}${suffix} in your editor`}
         onClick={(event) => {
           event.stopPropagation()
-          openInEditor(ref.path, ref.line, ref.column)
+          openInEditor(directory, ref.path, ref.line, ref.column)
         }}
       >
         {label}
@@ -395,7 +384,7 @@ function ToolBody({ part, directory }: { part: ToolPart; directory: string }): R
               title={`Open ${file} in your editor`}
               onClick={(event) => {
                 event.stopPropagation()
-                openInEditor(file)
+                openInEditor(directory, file)
               }}
             >
               {file}

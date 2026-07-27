@@ -6,6 +6,10 @@ import { writeFile } from 'node:fs/promises'
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import type { Message, Part, Provider, Session } from '@opencode-ai/sdk'
 import { getAuthorizedProviderIDs, getClient, getStatus, isAuthorizedProvider, restartServer, setEventDirectory, type ServerStatus } from './server'
+import { register as registerFs } from './fsService'
+import { register as registerGit } from './gitService'
+import { register as registerTerminal } from './terminal'
+import { register as registerOpenEditor } from './openEditor'
 import { deleteKey, listKeys, setKey, testKey, type MaskedKeyRow } from './keys'
 import {
   addKnowledge,
@@ -133,7 +137,24 @@ const CHANNELS = [
   'oc:nanogpt:generate',
   'oc:nanogpt:images:list',
   'oc:nanogpt:images:read',
-  'oc:nanogpt:images:delete'
+  'oc:nanogpt:images:delete',
+  'oc:fs:tree',
+  'oc:fs:read',
+  'oc:fs:write',
+  'oc:git:status',
+  'oc:git:diff',
+  'oc:git:stage',
+  'oc:git:unstage',
+  'oc:git:stageHunks',
+  'oc:git:commit',
+  'oc:git:branches',
+  'oc:git:checkout',
+  'oc:git:remoteUrl',
+  'oc:term:start',
+  'oc:term:write',
+  'oc:term:resize',
+  'oc:term:kill',
+  'oc:openEditor'
 ] as const
 
 /** Sizes the image endpoint is asked for. An allowlist — `size` is forwarded to a paid API. */
@@ -1016,6 +1037,18 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
   ipcMain.handle('oc:live:start', (event): Promise<void> => startGeminiLive(event.sender))
   ipcMain.handle('oc:live:stop', (event): void => stopGeminiLive(event.sender.id))
   ipcMain.on('oc:live:send', (event, input: GeminiLiveInput): void => sendGeminiLive(event.sender.id, input))
+
+  /* ---------------------------------------------------------------- */
+  /* Phase 1 — fs / git / terminal / editor deep-link (code surface)   */
+  /* Each service owns its own handlers; this is the single place all */
+  /* four are registered (unifying the previously split registration  */
+  /* between here and src/main/index.ts).                             */
+  /* ---------------------------------------------------------------- */
+
+  registerFs(ipcMain)
+  registerGit(ipcMain)
+  registerTerminal(ipcMain)
+  registerOpenEditor(ipcMain)
 }
 
 

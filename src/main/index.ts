@@ -1,13 +1,12 @@
 /**
  * Electron app lifecycle: window creation, OpenCode server supervision, event fan-out.
  */
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, screen, session } from 'electron'
+import { app, BrowserWindow, desktopCapturer, dialog, screen, session } from 'electron'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { initCrashLog, logCrash } from './crashlog'
 import { registerIpc, unregisterIpc } from './ipc'
-import { register as registerOpenEditor } from './openEditor'
 import { setupApplicationMenu } from './menu'
 import { createAppSettingsController, type AppSettingsController } from './appSettings'
 import { setupQuickEntry, type QuickEntryController } from './quickEntry'
@@ -402,7 +401,6 @@ if (!allowDevelopmentInstance && !app.requestSingleInstanceLock()) {
     setupUpdater(broadcastUpdateStatus, { beforeInstall: () => { quitRequested = true } })
     setupApplicationMenu({ onCheckForUpdates: () => { void checkForUpdates() }, onQuit: requestQuit })
     registerIpc({ appSettings, onQuickSubmit: (text) => quickEntry?.submit(text) })
-    registerOpenEditor(ipcMain)
     createWindow()
 
     void startServer().then((serverStatus) => {
@@ -434,7 +432,6 @@ if (!allowDevelopmentInstance && !app.requestSingleInstanceLock()) {
     quickEntry = null
     stopServer()
     unregisterIpc()
-    ipcMain.removeHandler('oc:openEditor')
   })
 
   app.on('will-quit', () => {

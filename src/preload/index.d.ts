@@ -233,6 +233,87 @@ export type NanogptGenerateResult = {
   blacklisted: boolean
 }
 
+/* --- Phase 1 code surface (fs / git / terminal / editor deep-links) -------
+ * Deliberately duplicated rather than imported from src/main/fsService.ts / gitService.ts
+ * (main must not be imported by preload — see CONTRACTS.md "Phase 1 — Code surface"). Kept
+ * structurally identical to the main-process service definitions. */
+
+export type GitFileStatus =
+  | 'untracked'
+  | 'modified'
+  | 'added'
+  | 'deleted'
+  | 'renamed'
+  | 'conflicted'
+  | 'ignored'
+
+export type FileNode = {
+  name: string
+  /** POSIX-separated, ALWAYS relative to the session directory. */
+  path: string
+  kind: 'file' | 'dir'
+  gitStatus: GitFileStatus | null
+  /** Edited by the agent during this session. */
+  touched: boolean
+}
+
+export type FileContent = {
+  path: string
+  text: string
+  bytes: number
+  /** True when the file exceeded MAX_READ_BYTES. */
+  truncated: boolean
+  /** sha256 of the on-disk bytes; the optimistic-concurrency token. */
+  sha: string
+  /** Monaco language id, inferred from extension. */
+  language: string | null
+}
+
+export type DiffLine = { kind: 'ctx' | 'add' | 'del'; text: string }
+
+export type Hunk = {
+  /** Stable within one FileDiff: `${oldStart}-${newStart}`. */
+  id: string
+  /** "@@ -a,b +c,d @@" */
+  header: string
+  oldStart: number
+  oldLines: number
+  newStart: number
+  newLines: number
+  lines: DiffLine[]
+}
+
+export type FileDiff = {
+  path: string
+  /** Set on renames. */
+  oldPath?: string
+  /** When true, `hunks` is empty. */
+  binary: boolean
+  hunks: Hunk[]
+}
+
+export type GitStatusEntry = {
+  path: string
+  /** Staged side. */
+  index: GitFileStatus | null
+  /** Unstaged side. */
+  worktree: GitFileStatus | null
+  renamedFrom?: string
+}
+
+export type GitStatus = {
+  branch: string
+  upstream: string | null
+  ahead: number
+  behind: number
+  entries: GitStatusEntry[]
+  clean: boolean
+}
+
+export type GitBranch = { name: string; current: boolean; remote: boolean }
+
+export type TermId = string
+
 export interface OpencodeApi {
   status(): Promise<ServerStatus>
   restart(): Promise<ServerStatus>
@@ -320,6 +401,31 @@ export interface OpencodeApi {
   exportChat(defaultName: string, content: string): Promise<boolean>
   /** `encoding` defaults to 'utf8'; pass 'base64' to write bytes (e.g. a generated PNG). */
   saveFile(a: { defaultName: string; content: string; encoding?: 'utf8' | 'base64' }): Promise<boolean>
+  fs: {
+    tree(directory: string, path?: string, depth?: number): Promise<FileNode[]>
+    read(directory: string, path: string): Promise<FileContent>
+    write(a: { directory: string; path: string; text: string; baseSha: string }): Promise<{ sha: string }>
+  }
+  git: {
+    status(directory: string): Promise<GitStatus>
+    diff(a: { directory: string; path: string; staged?: boolean }): Promise<FileDiff>
+    stage(directory: string, paths: string[]): Promise<GitStatus>
+    unstage(directory: string, paths: string[]): Promise<GitStatus>
+    stageHunks(a: { directory: string; path: string; patch: string }): Promise<GitStatus>
+    commit(a: { directory: string; message: string; amend?: boolean }): Promise<{ sha: string }>
+    branches(directory: string): Promise<GitBranch[]>
+    checkout(a: { directory: string; branch: string; create?: boolean }): Promise<GitStatus>
+    remoteUrl(directory: string): Promise<string | null>
+  }
+  term: {
+    start(a: { directory: string; cols: number; rows: number }): Promise<{ id: TermId }>
+    write(id: TermId, data: string): Promise<void>
+    resize(id: TermId, cols: number, rows: number): Promise<void>
+    kill(id: TermId): Promise<void>
+    onData(cb: (e: { id: TermId; data: string }) => void): () => void
+    onExit(cb: (e: { id: TermId; code: number }) => void): () => void
+  }
+  openEditor(a: { directory: string; path: string; line?: number; column?: number }): Promise<void>
   /** Registers an SSE listener; call the returned function to unsubscribe. */
   onEvent(cb: (e: OcEvent) => void): () => void
   /** Registers a server-status listener; call the returned function to unsubscribe. */
