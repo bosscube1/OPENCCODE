@@ -14,6 +14,7 @@
 import { api, errText } from './api'
 import { selectedHunksToPatch } from '../hunks'
 import type { AppState, SetState, GetState } from './types'
+import type { FileDiff } from '../types'
 
 export type GitSlice = Pick<
   AppState,
@@ -27,6 +28,9 @@ export type GitSlice = Pick<
   | 'stageHunks'
   | 'commit'
   | 'generateCommitMessage'
+  | 'changedDiffs'
+  | 'changedDiffsLoading'
+  | 'loadChangedDiffs'
 >
 
 const REFRESH_DEBOUNCE_MS = 300
@@ -52,6 +56,8 @@ export function createGitSlice(set: SetState, get: GetState): GitSlice {
     gitStatus: null,
     gitBranches: [],
     gitStatusFor: null,
+    changedDiffs: {},
+    changedDiffsLoading: false,
 
     refreshGit(): Promise<void> {
       return new Promise((resolve) => {
@@ -195,6 +201,51 @@ export function createGitSlice(set: SetState, get: GetState): GitSlice {
       }
 
       return `Update ${changed.length} files`
+    },
+
+    async loadChangedDiffs(): Promise<void> {
+      const { directory, gitStatus } = get()
+      if (!directory || !gitStatus) {
+        set({ changedDiffs: {} })
+        return
+      }
+
+      set({ changedDiffsLoading: true })
+      try {
+        // A path with BOTH staged and unstaged edits is asked for its unstaged
+        // (worktree-vs-index) diff — the working tree is what a reviewer usually
+        // wants to see next — falling back to the staged (index-vs-HEAD) diff for
+        // paths that are staged only.
+        const entries = gitStatus.entries.filter((e) => e.worktree !== null || e.index !== null)
+        const results = await Promise.all(
+          entries.map(async (entry) => {
+            try {
+              const diff = await api().git.diff({
+                directory,
+                path: entry.path,
+                staged: entry.worktree === null
+              })
+              return [entry.path, diff] as const
+            } catch {
+              // One file's diff failing (e.g. a race with a delete) shouldn't blank
+              // out every other file's diff — just drop that one row.
+              return null
+            }
+          })
+        )
+
+        // The directory may have changed while these round-trips were in flight;
+        // a stale batch landing after a workspace switch must not overwrite it.
+        if (get().directory !== directory) return
+
+        const map: Record<string, FileDiff> = {}
+        for (const result of results) {
+          if (result) map[result[0]] = result[1]
+        }
+        set({ changedDiffs: map })
+      } finally {
+        if (get().directory === directory) set({ changedDiffsLoading: false })
+      }
     }
   }
 }

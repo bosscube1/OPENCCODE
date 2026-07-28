@@ -15,6 +15,7 @@ import { LiveScreenAssistant } from './components/LiveScreenAssistant'
 import { FileTree } from './components/FileTree'
 import { EditorPanel } from './components/EditorPanel'
 import { GitPanel } from './components/GitPanel'
+import { ChangesPanel } from './components/ChangesPanel'
 import { TerminalPanel } from './components/TerminalPanel'
 import { CommandPalette } from './components/CommandPalette'
 import { ErrorBoundary } from './components/ErrorBoundary'
@@ -26,10 +27,11 @@ import './index.css'
 type PanelTab = AppState['panelTab']
 
 /** Tab order in the right-hand code-surface panel. */
-const PANEL_TABS = ['files', 'editor', 'git', 'terminal', 'artifacts'] as const
+const PANEL_TABS = ['files', 'editor', 'changes', 'git', 'terminal', 'artifacts'] as const
 const PANEL_LABELS: Record<(typeof PANEL_TABS)[number], string> = {
   files: 'Files',
   editor: 'Editor',
+  changes: 'Changes',
   git: 'Git',
   terminal: 'Terminal',
   artifacts: 'Artifacts'
@@ -423,6 +425,11 @@ export function App(): JSX.Element {
             {effectivePanelTab === 'editor' && (
               <ErrorBoundary label="Editor">
                 <EditorPanel />
+              </ErrorBoundary>
+            )}
+            {effectivePanelTab === 'changes' && (
+              <ErrorBoundary label="Changes">
+                <ChangesPanel />
               </ErrorBoundary>
             )}
             {effectivePanelTab === 'git' && (

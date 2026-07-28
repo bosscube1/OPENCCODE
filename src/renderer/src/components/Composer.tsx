@@ -6,6 +6,7 @@ import { guessMime, joinPath, toFileUrl } from '../lib/fileurl'
 import type { PromptPart } from '../lib/types'
 import { MentionMenu } from './MentionMenu'
 import { ModelPicker } from './ModelPicker'
+import { FILE_TREE_DRAG_MIME } from './FileTree'
 import './composer.css'
 
 const MAX_HEIGHT_RATIO = 0.4
@@ -223,8 +224,13 @@ export function Composer(): ReactNode {
     areaRef.current?.focus()
   }, [text, mentionStart, mentionQuery, directory])
 
-  /** Only react to file drags — dragging plain text/HTML must not trigger the overlay or a drop. */
-  const isFileDrag = (e: React.DragEvent): boolean => Array.from(e.dataTransfer.types).includes('Files')
+  /** Only react to file drags — dragging plain text/HTML must not trigger the overlay or a drop.
+   *  Covers both an OS file drag (`Files`) and an internal drag started from the file tree
+   *  (`FILE_TREE_DRAG_MIME`), since a same-window HTML5 drag never populates `dataTransfer.files`. */
+  const isFileDrag = (e: React.DragEvent): boolean => {
+    const types = Array.from(e.dataTransfer.types)
+    return types.includes('Files') || types.includes(FILE_TREE_DRAG_MIME)
+  }
 
   const onDragOver = useCallback(
     (e: React.DragEvent) => {
@@ -250,6 +256,20 @@ export function Composer(): ReactNode {
       setIsDragging(false)
       if (disabled) return
 
+      // Internal drag from the file tree: no dataTransfer.files, path comes from the
+      // custom MIME type and is workspace-relative, so resolve it the same way @mentions do.
+      const internalPath = e.dataTransfer.getData(FILE_TREE_DRAG_MIME)
+      if (internalPath && directory) {
+        const absPath = joinPath(directory, internalPath)
+        const segments = absPath.split(/[/\\]/)
+        const filename = segments[segments.length - 1]
+        setAttachments((prev) => {
+          if (prev.some((a) => a.absPath === absPath)) return prev
+          return [...prev, { filename, absPath }]
+        })
+        return
+      }
+
       const dropped = Array.from(e.dataTransfer.files)
       if (dropped.length === 0) return
 
@@ -267,7 +287,7 @@ export function Composer(): ReactNode {
         })
       }
     },
-    [disabled]
+    [disabled, directory]
   )
 
   const canSend = !disabled && !sending && text.trim() !== ''

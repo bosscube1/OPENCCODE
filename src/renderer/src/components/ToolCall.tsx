@@ -507,10 +507,14 @@ export function ToolCall({ part }: { part: ToolPart }): ReactNode {
   const directory = useStore((state) => state.directory) ?? ''
 
   const status = part.state.status
-  const autoOpen = status === 'running' || status === 'error'
+  const kind = toolKind(part.tool)
+  // Edits render a diff (see DiffView above) that IS the point of the card — a completed
+  // edit collapsed by default would hide the one thing the user came to see. Other tool
+  // kinds (bash output, reads, etc.) keep the normal collapse-on-completion behavior.
+  const isDiffKind = kind === 'edit' || kind === 'multiedit' || kind === 'patch'
+  const autoOpen = status === 'running' || status === 'error' || (status === 'completed' && isDiffKind)
   const open = override ?? autoOpen
 
-  const kind = toolKind(part.tool)
   const title = stateTitle(part.state)
   const duration = stateDuration(part.state)
 

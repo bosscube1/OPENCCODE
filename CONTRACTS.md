@@ -1163,6 +1163,9 @@ unstagePaths(paths: string[]): Promise<void>
 checkoutBranch(branch: string, create?: boolean): Promise<void>
 stageHunks(path: string, hunkIds: string[]): Promise<void>
 commit(message: string): Promise<void>; generateCommitMessage(): Promise<string>
+changedDiffs: Record<string, FileDiff>     // every changed path's diff, keyed by path — backs the Changes tab
+changedDiffsLoading: boolean
+loadChangedDiffs(): Promise<void>          // refetches from current gitStatus; per-file failures drop, batch survives
 
 // terminal slice
 terminals: Array<{ id: TermId; title: string }>; activeTermID: TermId | null
@@ -1170,10 +1173,17 @@ startTerminal(): Promise<void>; setActiveTermID(id: TermId | null): void
 killTerminal(id: TermId): Promise<void>
 
 // ui slice
-panelTab: 'files' | 'editor' | 'git' | 'terminal' | 'artifacts' | null   // null = panel collapsed
+panelTab: 'files' | 'editor' | 'git' | 'terminal' | 'artifacts' | 'changes' | null   // null = panel collapsed
 setPanelTab(tab: AppState['panelTab']): void
 paletteOpen: boolean; setPaletteOpen(open: boolean): void
 ```
+
+Renderer-internal drag contract: dragging a file out of the tree sets the MIME type
+`application/x-opencode-file-path` (exported as `FILE_TREE_DRAG_MIME` from
+`FileTree.tsx`) to the workspace-relative `FileNode.path`, plus the same string on
+`text/plain` for external drop targets. The composer accepts both this and an OS file
+drag — a same-window HTML5 drag never populates `dataTransfer.files`, which is why the
+custom type exists.
 
 `refreshGit()` and `refreshTree()` are each debounced (300 ms) and are both triggered by the
 existing `file.edited` SSE event — the agent editing a file must update the git panel, and an
