@@ -301,11 +301,17 @@ export function selectedHunksToPatch(diff: FileDiff, hunkIds: string[]): string 
   }
 
   const oldPath = diff.oldPath ?? diff.path
-  const out: string[] = [
-    `diff --git a/${oldPath} b/${diff.path}`,
-    isCreation(diff) ? '--- /dev/null' : `--- a/${oldPath}`,
-    isDeletion(diff) ? '+++ /dev/null' : `+++ b/${diff.path}`
-  ]
+  const creation = isCreation(diff)
+  const deletion = isDeletion(diff)
+  const out: string[] = [`diff --git a/${oldPath} b/${diff.path}`]
+  // git apply only honours a `/dev/null` side when the extended header declares the
+  // create/delete. Without it, `-p1` strips `/dev/null` to `dev/null` and git creates a
+  // stray `dev/` directory instead of adding or removing the file. `FileDiff` carries no
+  // file mode, so the ubiquitous 100644 is assumed; a mode mismatch is only a git warning.
+  if (creation) out.push('new file mode 100644')
+  if (deletion) out.push('deleted file mode 100644')
+  out.push(creation ? '--- /dev/null' : `--- a/${oldPath}`)
+  out.push(deletion ? '+++ /dev/null' : `+++ b/${diff.path}`)
 
   let delta = 0
   for (const hunk of picked) {

@@ -49,6 +49,13 @@ export type Hunk = {
   newStart: number
   newLines: number
   lines: DiffLine[]
+  /**
+   * Set when the corresponding side ends without a trailing newline
+   * ("\ No newline at end of file"). Load-bearing: without it, applying a
+   * file's final hunk silently adds a newline that was never in the source.
+   */
+  oldNoEofNewline?: boolean
+  newNoEofNewline?: boolean
 }
 
 export type FileDiff = {
@@ -469,7 +476,20 @@ export function parseUnifiedDiff(raw: string, fallbackPath: string): FileDiff {
       continue
     }
     if (!current) continue
-    if (line.startsWith('\\')) continue // "\ No newline at end of file"
+    if (line.startsWith('\\')) {
+      // "\ No newline at end of file" applies to the line just emitted. Dropping it
+      // loses information the renderer needs: accepting a file's final hunk would
+      // then silently append a trailing newline the user never asked for. A context
+      // line means neither side has one; otherwise it belongs to that one side.
+      const last = current.lines[current.lines.length - 1]
+      if (last?.kind === 'del') current.oldNoEofNewline = true
+      else if (last?.kind === 'add') current.newNoEofNewline = true
+      else if (last?.kind === 'ctx') {
+        current.oldNoEofNewline = true
+        current.newNoEofNewline = true
+      }
+      continue
+    }
     if (emitted >= MAX_DIFF_LINES) {
       capped = true
       current = null

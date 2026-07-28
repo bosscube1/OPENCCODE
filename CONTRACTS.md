@@ -974,6 +974,11 @@ export type Hunk = {
   oldStart: number; oldLines: number
   newStart: number; newLines: number
   lines: DiffLine[]
+  // Set when that side ends without a trailing newline ("\ No newline at end of file").
+  // Load-bearing, not cosmetic: without it, applying a file's final hunk silently
+  // appends a newline that was never in the source.
+  oldNoEofNewline?: boolean
+  newNoEofNewline?: boolean
 }
 
 export type FileDiff = {
@@ -1143,12 +1148,15 @@ toggleHunk(id: string): void; applyAcceptedHunks(): Promise<void>; closeFile(): 
 // git slice
 gitStatus: GitStatus | null; gitBranches: GitBranch[]
 refreshGit(): Promise<void>; stagePaths(paths: string[]): Promise<void>
+unstagePaths(paths: string[]): Promise<void>
+checkoutBranch(branch: string, create?: boolean): Promise<void>
 stageHunks(path: string, hunkIds: string[]): Promise<void>
 commit(message: string): Promise<void>; generateCommitMessage(): Promise<string>
 
 // terminal slice
 terminals: Array<{ id: TermId; title: string }>; activeTermID: TermId | null
-startTerminal(): Promise<void>; killTerminal(id: TermId): Promise<void>
+startTerminal(): Promise<void>; setActiveTermID(id: TermId | null): void
+killTerminal(id: TermId): Promise<void>
 
 // ui slice
 panelTab: 'editor' | 'git' | 'terminal' | 'artifacts' | null   // null = panel collapsed

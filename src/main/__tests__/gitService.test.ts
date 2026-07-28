@@ -231,6 +231,25 @@ describe('parseUnifiedDiff', () => {
     expect(diff.truncated).toBe(true)
   })
 
+  it('records "no newline at end of file" per side', () => {
+    // Dropping this marker means accepting a file's final hunk silently appends a
+    // newline the source never had.
+    const newOnly = 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n\\ No newline at end of file\n'
+    expect(parseUnifiedDiff(newOnly, 'x').hunks[0]).toMatchObject({
+      newNoEofNewline: true
+    })
+    expect(parseUnifiedDiff(newOnly, 'x').hunks[0].oldNoEofNewline).toBeUndefined()
+
+    const oldOnly = 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n\\ No newline at end of file\n+b\n'
+    expect(parseUnifiedDiff(oldOnly, 'x').hunks[0].oldNoEofNewline).toBe(true)
+
+    // A context line carries the marker for BOTH sides.
+    const both = 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n-a\n+b\n c\n\\ No newline at end of file\n'
+    const hunk = parseUnifiedDiff(both, 'x').hunks[0]
+    expect(hunk.oldNoEofNewline).toBe(true)
+    expect(hunk.newNoEofNewline).toBe(true)
+  })
+
   it('does not flag truncation for a diff under the cap', () => {
     const raw = 'diff --git a/x.txt b/x.txt\n--- a/x.txt\n+++ b/x.txt\n@@ -1 +1 @@\n-a\n+b\n'
     expect(parseUnifiedDiff(raw, 'x.txt').truncated).toBe(false)

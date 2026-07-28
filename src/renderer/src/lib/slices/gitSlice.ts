@@ -16,7 +16,15 @@ import type { AppState, SetState, GetState } from './types'
 
 export type GitSlice = Pick<
   AppState,
-  'gitStatus' | 'gitBranches' | 'refreshGit' | 'stagePaths' | 'stageHunks' | 'commit' | 'generateCommitMessage'
+  | 'gitStatus'
+  | 'gitBranches'
+  | 'refreshGit'
+  | 'stagePaths'
+  | 'unstagePaths'
+  | 'checkoutBranch'
+  | 'stageHunks'
+  | 'commit'
+  | 'generateCommitMessage'
 >
 
 const REFRESH_DEBOUNCE_MS = 300
@@ -55,6 +63,33 @@ export function createGitSlice(set: SetState, get: GetState): GitSlice {
       try {
         const status = await api().git.stage(directory, paths)
         set({ gitStatus: status })
+      } catch (e) {
+        set({ error: errText(e) })
+      }
+    },
+
+    async unstagePaths(paths: string[]): Promise<void> {
+      const { directory } = get()
+      if (!directory || paths.length === 0) return
+      try {
+        const status = await api().git.unstage(directory, paths)
+        set({ gitStatus: status })
+      } catch (e) {
+        set({ error: errText(e) })
+      }
+    },
+
+    async checkoutBranch(branch: string, create = false): Promise<void> {
+      const { directory } = get()
+      if (!directory || !branch) return
+      try {
+        const status = await api().git.checkout({ directory, branch, create })
+        set({ gitStatus: status })
+        // Switching branches rewrites the working tree, so anything cached from the
+        // old one is stale: the open file may not exist on this branch, and the tree
+        // certainly differs.
+        get().closeFile()
+        await get().loadTree()
       } catch (e) {
         set({ error: errText(e) })
       }

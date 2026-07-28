@@ -8,7 +8,10 @@ import { api, errText } from './api'
 import type { AppState, SetState, GetState } from './types'
 import type { TermId } from '../types'
 
-export type TerminalSlice = Pick<AppState, 'terminals' | 'activeTermID' | 'startTerminal' | 'killTerminal'>
+export type TerminalSlice = Pick<
+  AppState,
+  'terminals' | 'activeTermID' | 'startTerminal' | 'setActiveTermID' | 'killTerminal'
+>
 
 export function createTerminalSlice(set: SetState, get: GetState): TerminalSlice {
   return {
@@ -30,6 +33,14 @@ export function createTerminalSlice(set: SetState, get: GetState): TerminalSlice
       } catch (e) {
         set({ error: errText(e) })
       }
+    },
+
+    setActiveTermID(id: TermId | null): void {
+      // Ignore ids that are not live terminals, so a stale tab click cannot
+      // point the panel at a PTY that has already exited.
+      set((state) =>
+        id === null || state.terminals.some((t) => t.id === id) ? { activeTermID: id } : {}
+      )
     },
 
     async killTerminal(id: TermId): Promise<void> {

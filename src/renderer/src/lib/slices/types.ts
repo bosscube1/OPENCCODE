@@ -158,6 +158,9 @@ export interface AppState {
   gitBranches: GitBranch[]
   refreshGit(): Promise<void>
   stagePaths(paths: string[]): Promise<void>
+  unstagePaths(paths: string[]): Promise<void>
+  /** Switches branch, then closes the open file and reloads the tree — both are stale after a checkout. */
+  checkoutBranch(branch: string, create?: boolean): Promise<void>
   stageHunks(path: string, hunkIds: string[]): Promise<void>
   commit(message: string): Promise<void>
   generateCommitMessage(): Promise<string>
@@ -166,6 +169,8 @@ export interface AppState {
   terminals: Array<{ id: TermId; title: string }>
   activeTermID: TermId | null
   startTerminal(): Promise<void>
+  /** Selects a tab. Ignores ids that are not live terminals. */
+  setActiveTermID(id: TermId | null): void
   killTerminal(id: TermId): Promise<void>
 
   // ui slice — panel additions
