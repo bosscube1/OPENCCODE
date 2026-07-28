@@ -980,6 +980,7 @@ export type FileDiff = {
   path: string
   oldPath?: string              // set on renames
   binary: boolean               // when true, `hunks` is empty
+  truncated: boolean            // true when hunks were dropped at the 5000-line cap
   hunks: Hunk[]
 }
 

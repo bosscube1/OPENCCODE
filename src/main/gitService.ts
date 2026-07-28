@@ -57,6 +57,14 @@ export type FileDiff = {
   oldPath?: string
   /** When true, `hunks` is empty. */
   binary: boolean
+  /**
+   * True when the diff exceeded MAX_DIFF_LINES and hunks were dropped.
+   *
+   * The UI MUST surface this. A partial diff that looks complete is a data-loss
+   * trap: the user reviews what is shown, stages "all hunks", and silently
+   * loses every change past the cap.
+   */
+  truncated: boolean
   hunks: Hunk[]
 }
 
@@ -400,7 +408,7 @@ function stripPrefix(p: string): string {
  * lines; anything past the cap is dropped rather than streamed.
  */
 export function parseUnifiedDiff(raw: string, fallbackPath: string): FileDiff {
-  const diff: FileDiff = { path: fallbackPath, binary: false, hunks: [] }
+  const diff: FileDiff = { path: fallbackPath, binary: false, truncated: false, hunks: [] }
   let current: Hunk | null = null
   let emitted = 0
   let capped = false
@@ -476,6 +484,7 @@ export function parseUnifiedDiff(raw: string, fallbackPath: string): FileDiff {
   }
 
   if (diff.oldPath === diff.path) delete diff.oldPath
+  diff.truncated = capped
   return diff
 }
 
@@ -484,21 +493,23 @@ async function untrackedDiff(directory: string, relPath: string): Promise<FileDi
   const abs = assertSubpath(directory, relPath)
   const info = await stat(abs)
   if (!info.isFile() || info.size > MAX_UNTRACKED_DIFF_BYTES) {
-    return { path: relPath, binary: true, hunks: [] }
+    return { path: relPath, binary: true, truncated: false, hunks: [] }
   }
   const buffer = await readFile(abs)
   if (buffer.subarray(0, 8 * 1024).includes(0)) {
-    return { path: relPath, binary: true, hunks: [] }
+    return { path: relPath, binary: true, truncated: false, hunks: [] }
   }
   const text = buffer.toString('utf8')
   const all = text.length === 0 ? [] : text.replace(/\n$/, '').split('\n')
   const lines: DiffLine[] = all
     .slice(0, MAX_DIFF_LINES)
     .map((text_) => ({ kind: 'add' as const, text: text_ }))
-  if (lines.length === 0) return { path: relPath, binary: false, hunks: [] }
+  if (lines.length === 0) return { path: relPath, binary: false, truncated: false, hunks: [] }
   return {
     path: relPath,
     binary: false,
+    // `all` was sliced to MAX_DIFF_LINES above; anything beyond that was dropped.
+    truncated: all.length > MAX_DIFF_LINES,
     hunks: [
       {
         id: `0-1`,
@@ -528,7 +539,7 @@ export async function getDiff(
     const entry = status.entries.find((e) => e.path === rel)
     if (entry && entry.worktree === 'untracked') return untrackedDiff(directory, rel)
   }
-  if (stdout.trim().length === 0) return { path: rel, binary: false, hunks: [] }
+  if (stdout.trim().length === 0) return { path: rel, binary: false, truncated: false, hunks: [] }
   return parseUnifiedDiff(stdout, rel)
 }
 

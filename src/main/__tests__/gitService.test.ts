@@ -220,12 +220,20 @@ describe('getDiff', () => {
 })
 
 describe('parseUnifiedDiff', () => {
-  it('caps at MAX_DIFF_LINES', () => {
+  it('caps at MAX_DIFF_LINES and REPORTS the truncation', () => {
     const body = Array.from({ length: MAX_DIFF_LINES + 500 }, (_, i) => `+line ${i}`).join('\n')
     const raw = `diff --git a/x.txt b/x.txt\n--- a/x.txt\n+++ b/x.txt\n@@ -0,0 +1,${MAX_DIFF_LINES + 500} @@\n${body}\n`
     const diff = parseUnifiedDiff(raw, 'x.txt')
     const total = diff.hunks.reduce((n, h) => n + h.lines.length, 0)
     expect(total).toBe(MAX_DIFF_LINES)
+    // Capping silently is a data-loss trap: the user reviews a diff that looks
+    // complete, stages "all hunks", and loses everything past the cap.
+    expect(diff.truncated).toBe(true)
+  })
+
+  it('does not flag truncation for a diff under the cap', () => {
+    const raw = 'diff --git a/x.txt b/x.txt\n--- a/x.txt\n+++ b/x.txt\n@@ -1 +1 @@\n-a\n+b\n'
+    expect(parseUnifiedDiff(raw, 'x.txt').truncated).toBe(false)
   })
 
   it('picks up renames as oldPath', () => {
@@ -248,7 +256,12 @@ describe('parseUnifiedDiff', () => {
 
   it('marks binary output', () => {
     const raw = 'diff --git a/x.bin b/x.bin\nBinary files a/x.bin and b/x.bin differ\n'
-    expect(parseUnifiedDiff(raw, 'x.bin')).toEqual({ path: 'x.bin', binary: true, hunks: [] })
+    expect(parseUnifiedDiff(raw, 'x.bin')).toEqual({
+      path: 'x.bin',
+      binary: true,
+      truncated: false,
+      hunks: []
+    })
   })
 })
 

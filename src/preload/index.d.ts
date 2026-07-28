@@ -289,6 +289,12 @@ export type FileDiff = {
   oldPath?: string
   /** When true, `hunks` is empty. */
   binary: boolean
+  /**
+   * True when the diff exceeded the 5000-line cap and hunks were dropped.
+   * The UI MUST surface this — a partial diff that looks complete lets the
+   * user stage "all hunks" and silently lose everything past the cap.
+   */
+  truncated: boolean
   hunks: Hunk[]
 }
 
