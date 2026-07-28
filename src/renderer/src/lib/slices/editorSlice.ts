@@ -9,6 +9,7 @@
  */
 
 import { api, errText } from './api'
+import { applyHunksToText } from '../hunks'
 import type { AppState, SetState, GetState } from './types'
 
 export type EditorSlice = Pick<
@@ -101,14 +102,45 @@ export function createEditorSlice(set: SetState, get: GetState): EditorSlice {
     },
 
     async applyAcceptedHunks(): Promise<void> {
-      // TODO(hunks): needs `applyHunksToText` from src/renderer/src/lib/hunks.ts (not yet
-      // written — owned by a concurrent workstream). Wire this up once that module lands:
-      //   const { openFile, openFileDiff, acceptedHunkIds } = get()
-      //   if (!openFile || !openFileDiff) return
-      //   const text = applyHunksToText(openFile.text, openFileDiff, acceptedHunkIds)
-      //   await api().fs.write({ directory, path: openFile.path, text, baseSha: openFile.sha })
-      set({ error: 'Applying hunks is not available yet.' })
-      throw new Error('hunks module not yet available')
+      const { directory, openFile, openFileDiff, acceptedHunkIds } = get()
+      if (!directory || !openFile || !openFileDiff || acceptedHunkIds.length === 0) return
+
+      // A truncated diff is missing hunks entirely, so "apply the accepted ones"
+      // cannot mean what the user thinks it means. Refuse rather than write a
+      // partial result that looks deliberate.
+      if (openFileDiff.truncated) {
+        set({
+          error: `${openFile.path} has a partial diff (too large to show in full). Applying individual hunks is disabled for it — stage the whole file instead.`
+        })
+        return
+      }
+
+      let text: string
+      try {
+        // Throws on stale context rather than landing a hunk at the wrong offset.
+        text = applyHunksToText(openFile.text, openFileDiff, acceptedHunkIds)
+      } catch (e) {
+        set({
+          error: `Could not apply those hunks — the file changed since this diff was taken. Reopen ${openFile.path} and try again. (${errText(e)})`
+        })
+        return
+      }
+
+      try {
+        const { sha } = await api().fs.write({
+          directory,
+          path: openFile.path,
+          text,
+          baseSha: openFile.sha
+        })
+        set({ openFile: { ...openFile, text, sha }, openFileDirty: false, acceptedHunkIds: [] })
+      } catch (e) {
+        set({ error: errText(e) })
+        return
+      }
+
+      await get().openPath(openFile.path)
+      void get().refreshGit()
     },
 
     closeFile(): void {

@@ -892,7 +892,7 @@ and imports it from `Chat.tsx`. Design tokens both use, defined by Agent D in `i
 
 ```
 --bg, --bg-alt, --bg-inset, --fg, --fg-dim, --border, --accent, --accent-fg,
---danger, --warn, --ok, --radius, --mono
+--danger, --warn, --ok, --press, --radius, --mono
 ```
 
 Additional tokens (Agent D owns, added on top of the contract set above — do not remove
@@ -1017,7 +1017,9 @@ export type TermId = string
 'oc:fs:tree'    (args: { directory: string; path?: string; depth?: number }) => FileNode[]
                 // LAZY, one level by default (depth 1, max 3). Never a full recursive walk —
                 // a 200k-file repo must not block the main process. Sorted dirs-first, then
-                // name. Honours .gitignore.
+                // name. Honours .gitignore. Returns a flat array; consumers must reconstruct
+                // nesting from the `path` field and must not rely on array order (merges from
+                // multiple levels may append out of sequence).
 'oc:fs:read'    (args: { directory: string; path: string }) => FileContent
                 // Refuses binaries (NUL byte in the first 8 KB). Truncates past MAX_READ_BYTES
                 // (2 MiB) and sets `truncated`.
@@ -1103,10 +1105,11 @@ openEditor(a: { directory: string; path: string; line?: number; column?: number 
    its environment through the existing `ALLOWLIST`/`ALIASES` in `src/main/env.ts` — a terminal
    must not inherit decrypted BYOK keys. Every PTY is killed on window close and on app quit;
    PTY handles are keyed per `WebContents` so a reload cannot orphan one.
-5. **`oc:openEditor` is scheme-allowlisted.** Only `vscode://`, `vscode-insiders://`, `cursor://`,
-   `jetbrains://` URLs are constructed, and only from a contained path. The renderer never passes
-   a URL — it passes a path, and main builds the URL. This prevents `shell.openExternal` becoming
-   an arbitrary-protocol gadget.
+5. **`oc:openEditor` is scheme-allowlisted.** Only `vscode://`, `vscode-insiders://`, and `cursor://`
+   URLs are constructed, and only from a contained path. The renderer never passes a URL — it passes
+   a path, and main builds the URL. This prevents `shell.openExternal` becoming an arbitrary-protocol
+   gadget. JetBrains support is not implemented (their IDEs use proprietary deep-link schemes like
+   `jetbrains://idea/navigate/reference?...` that require project-specific context).
 6. **Write concurrency.** `oc:fs:write` is the only renderer-driven write path and is gated on
    `baseSha`. The agent's own edits go through OpenCode's tools as before and are unaffected.
 7. **Output bounds.** `oc:fs:read` caps at 2 MiB; `oc:git:diff` caps at 5 000 lines per file and

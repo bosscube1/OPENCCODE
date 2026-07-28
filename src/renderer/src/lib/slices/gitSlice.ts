@@ -12,6 +12,7 @@
  */
 
 import { api, errText } from './api'
+import { selectedHunksToPatch } from '../hunks'
 import type { AppState, SetState, GetState } from './types'
 
 export type GitSlice = Pick<
@@ -95,13 +96,51 @@ export function createGitSlice(set: SetState, get: GetState): GitSlice {
       }
     },
 
-    async stageHunks(_path: string, _hunkIds: string[]): Promise<void> {
-      // TODO(hunks): needs `selectedHunksToPatch` from src/renderer/src/lib/hunks.ts to build
-      // the unified-diff patch, then:
-      //   const status = await api().git.stageHunks({ directory, path, patch })
-      //   set({ gitStatus: status })
-      set({ error: 'Staging individual hunks is not available yet.' })
-      throw new Error('hunks module not yet available')
+    async stageHunks(path: string, hunkIds: string[]): Promise<void> {
+      const { directory, openFileDiff } = get()
+      if (!directory || hunkIds.length === 0) return
+
+      // Reuse the already-loaded diff when it is the same file; otherwise fetch a
+      // fresh one. Hunk ids are only meaningful against the diff they came from.
+      let diff = openFileDiff && openFileDiff.path === path ? openFileDiff : null
+      if (!diff) {
+        try {
+          diff = await api().git.diff({ directory, path })
+        } catch (e) {
+          set({ error: errText(e) })
+          return
+        }
+      }
+
+      if (diff.truncated) {
+        set({
+          error: `${path} has a partial diff (too large to show in full). Hunk staging is disabled for it — stage the whole file instead.`
+        })
+        return
+      }
+
+      let patch: string
+      try {
+        patch = selectedHunksToPatch(diff, hunkIds)
+      } catch (e) {
+        set({ error: errText(e) })
+        return
+      }
+      if (patch === '') return
+
+      try {
+        const status = await api().git.stageHunks({ directory, path, patch })
+        set({ gitStatus: status })
+      } catch (e) {
+        // Known limitation: a renamed-and-edited file emits a patch referencing both
+        // the old and new path, which gitService's patchPaths check rejects.
+        const message = errText(e)
+        set({
+          error: /unexpected file/i.test(message)
+            ? `Cannot stage individual hunks of ${path} — it was renamed. Stage the whole file instead.`
+            : message
+        })
+      }
     },
 
     async commit(message: string): Promise<void> {
