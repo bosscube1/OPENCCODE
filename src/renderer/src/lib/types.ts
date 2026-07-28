@@ -240,3 +240,88 @@ export function isAssistant(message: Message): message is AssistantMessage {
 export function isUser(message: Message): message is UserMessage {
   return message.role === 'user'
 }
+
+/* ------------------------------------------------------------------ *
+ * Phase 1 code surface (fs / git / terminal / editor deep-links)
+ * Deliberately duplicated rather than imported from src/preload (the renderer
+ * never imports main/preload runtime modules) — kept structurally identical
+ * to src/preload/index.d.ts and CONTRACTS.md "Phase 1 — Code surface".
+ * ------------------------------------------------------------------ */
+
+export type GitFileStatus =
+  | 'untracked'
+  | 'modified'
+  | 'added'
+  | 'deleted'
+  | 'renamed'
+  | 'conflicted'
+  | 'ignored'
+
+export type FileNode = {
+  name: string
+  /** POSIX-separated, ALWAYS relative to the session directory. */
+  path: string
+  kind: 'file' | 'dir'
+  gitStatus: GitFileStatus | null
+  /** Edited by the agent during this session. */
+  touched: boolean
+}
+
+export type FileContent = {
+  path: string
+  text: string
+  bytes: number
+  /** True when the file exceeded MAX_READ_BYTES. */
+  truncated: boolean
+  /** sha256 of the on-disk bytes; the optimistic-concurrency token. */
+  sha: string
+  /** Monaco language id, inferred from extension. */
+  language: string | null
+}
+
+export type DiffLine = { kind: 'ctx' | 'add' | 'del'; text: string }
+
+export type Hunk = {
+  /** Stable within one FileDiff: `${oldStart}-${newStart}`. */
+  id: string
+  /** "@@ -a,b +c,d @@" */
+  header: string
+  oldStart: number
+  oldLines: number
+  newStart: number
+  newLines: number
+  lines: DiffLine[]
+}
+
+export type FileDiff = {
+  path: string
+  /** Set on renames. */
+  oldPath?: string
+  /** When true, `hunks` is empty. */
+  binary: boolean
+  /** True when the diff exceeded the 5000-line cap and hunks were dropped. */
+  truncated: boolean
+  hunks: Hunk[]
+}
+
+export type GitStatusEntry = {
+  path: string
+  /** Staged side. */
+  index: GitFileStatus | null
+  /** Unstaged side. */
+  worktree: GitFileStatus | null
+  renamedFrom?: string
+}
+
+export type GitStatus = {
+  branch: string
+  upstream: string | null
+  ahead: number
+  behind: number
+  entries: GitStatusEntry[]
+  clean: boolean
+}
+
+export type GitBranch = { name: string; current: boolean; remote: boolean }
+
+export type TermId = string

@@ -369,8 +369,16 @@ export function createEventSlice(set: SetState, get: GetState): EventSlice {
           return
         }
 
+        case 'file.edited': {
+          // The agent edited a file on disk. The git panel must reflect this without
+          // polling; refreshGit() is debounced (~300ms) internally so a burst of edits
+          // collapses into a single status/branches round-trip.
+          void get().refreshGit()
+          return
+        }
+
         default:
-          // server.connected, file.edited, todo.updated, tui.* … nothing to reduce.
+          // server.connected, todo.updated, tui.* … nothing to reduce.
           return
       }
     }

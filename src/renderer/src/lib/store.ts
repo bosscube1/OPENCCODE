@@ -27,10 +27,14 @@ import { pickDefaultModel, restoredSelectionValid } from './rotation'
 import { api, errText } from './slices/api'
 import { restoreLedger } from './slices/attemptMachine'
 import { createCompareSlice } from './slices/compareSlice'
+import { createEditorSlice } from './slices/editorSlice'
 import { createEventSlice } from './slices/eventSlice'
+import { createFileTreeSlice } from './slices/fileTreeSlice'
+import { createGitSlice } from './slices/gitSlice'
 import { createProjectsSlice } from './slices/projectsSlice'
 import { createRoutingSlice } from './slices/routingSlice'
 import { createSessionSlice } from './slices/sessionSlice'
+import { createTerminalSlice } from './slices/terminalSlice'
 import { createUiSlice } from './slices/uiSlice'
 import { registerStore } from './slices/storeRef'
 import type { AppState, SetState, GetState } from './slices/types'
@@ -49,6 +53,10 @@ export const useStore = create<AppState>()((set, get) => {
     ...createCompareSlice(setState, getState),
     ...createProjectsSlice(setState, getState),
     ...createUiSlice(setState, getState),
+    ...createFileTreeSlice(setState, getState),
+    ...createEditorSlice(setState, getState),
+    ...createGitSlice(setState, getState),
+    ...createTerminalSlice(setState, getState),
     ...createEventSlice(setState, getState),
 
     async init(): Promise<void> {

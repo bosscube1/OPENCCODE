@@ -21,7 +21,13 @@ import type {
   ServerCommand,
   ProjectRecord,
   PromptPart,
-  UpdateStatus
+  UpdateStatus,
+  FileNode,
+  FileContent,
+  FileDiff,
+  GitStatus,
+  GitBranch,
+  TermId
 } from '../types'
 
 export interface AppState {
@@ -123,6 +129,50 @@ export interface AppState {
   retryExchange(messageID: string): Promise<void>
   editAndResend(messageID: string, newText: string): Promise<void>
   setActiveArtifactID(id: string | null): void
+
+  /* ---- Phase 1 code surface: fs / editor / git / terminal / panel UI ---- */
+
+  // fileTree slice
+  treeRoot: FileNode[]
+  treeExpanded: Set<string>
+  treeLoading: boolean
+  loadTree(path?: string): Promise<void>
+  toggleTreeDir(path: string): Promise<void>
+
+  // editor slice
+  openFile: FileContent | null
+  openFileDirty: boolean
+  openFileDiff: FileDiff | null
+  acceptedHunkIds: string[]
+  openPath(path: string, line?: number): Promise<void>
+  /** Buffer an editor change. Does not touch disk; sets `openFileDirty`. */
+  setOpenFileText(text: string): void
+  /** Persist the buffer. Throws on a `baseSha` conflict rather than clobbering. */
+  saveOpenFile(): Promise<void>
+  toggleHunk(id: string): void
+  applyAcceptedHunks(): Promise<void>
+  closeFile(): void
+
+  // git slice
+  gitStatus: GitStatus | null
+  gitBranches: GitBranch[]
+  refreshGit(): Promise<void>
+  stagePaths(paths: string[]): Promise<void>
+  stageHunks(path: string, hunkIds: string[]): Promise<void>
+  commit(message: string): Promise<void>
+  generateCommitMessage(): Promise<string>
+
+  // terminal slice
+  terminals: Array<{ id: TermId; title: string }>
+  activeTermID: TermId | null
+  startTerminal(): Promise<void>
+  killTerminal(id: TermId): Promise<void>
+
+  // ui slice — panel additions
+  panelTab: 'editor' | 'git' | 'terminal' | 'artifacts' | null
+  setPanelTab(tab: AppState['panelTab']): void
+  paletteOpen: boolean
+  setPaletteOpen(open: boolean): void
 }
 
 /**

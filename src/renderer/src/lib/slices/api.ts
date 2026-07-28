@@ -24,7 +24,13 @@ import type {
   NanogptGenerateResult,
   NanogptModelsResult,
   NanogptRefreshResult,
-  NanoUsage
+  NanoUsage,
+  FileNode,
+  FileContent,
+  FileDiff,
+  GitStatus,
+  GitBranch,
+  TermId
 } from '../types'
 
 export interface OpencodeApi {
@@ -89,6 +95,31 @@ export interface OpencodeApi {
     response: PermissionResponse
   }): Promise<void>
   openExternal(url: string): Promise<void>
+  fs: {
+    tree(directory: string, path?: string, depth?: number): Promise<FileNode[]>
+    read(directory: string, path: string): Promise<FileContent>
+    write(a: { directory: string; path: string; text: string; baseSha: string }): Promise<{ sha: string }>
+  }
+  git: {
+    status(directory: string): Promise<GitStatus>
+    diff(a: { directory: string; path: string; staged?: boolean }): Promise<FileDiff>
+    stage(directory: string, paths: string[]): Promise<GitStatus>
+    unstage(directory: string, paths: string[]): Promise<GitStatus>
+    stageHunks(a: { directory: string; path: string; patch: string }): Promise<GitStatus>
+    commit(a: { directory: string; message: string; amend?: boolean }): Promise<{ sha: string }>
+    branches(directory: string): Promise<GitBranch[]>
+    checkout(a: { directory: string; branch: string; create?: boolean }): Promise<GitStatus>
+    remoteUrl(directory: string): Promise<string | null>
+  }
+  term: {
+    start(a: { directory: string; cols: number; rows: number }): Promise<{ id: TermId }>
+    write(id: TermId, data: string): Promise<void>
+    resize(id: TermId, cols: number, rows: number): Promise<void>
+    kill(id: TermId): Promise<void>
+    onData(cb: (e: { id: TermId; data: string }) => void): () => void
+    onExit(cb: (e: { id: TermId; code: number }) => void): () => void
+  }
+  openEditor(a: { directory: string; path: string; line?: number; column?: number }): Promise<void>
   onEvent(cb: (e: OcEvent) => void): () => void
   onServer(cb: (s: ServerStatus) => void): () => void
   onUpdateStatus(cb: (status: UpdateStatus) => void): () => void

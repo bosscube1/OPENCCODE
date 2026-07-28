@@ -1136,6 +1136,8 @@ loadTree(path?: string): Promise<void>; toggleTreeDir(path: string): Promise<voi
 openFile: FileContent | null; openFileDirty: boolean
 openFileDiff: FileDiff | null; acceptedHunkIds: string[]
 openPath(path: string, line?: number): Promise<void>
+setOpenFileText(text: string): void        // buffer an edit, sets openFileDirty
+saveOpenFile(): Promise<void>              // writes via oc:fs:write; THROWS on baseSha conflict
 toggleHunk(id: string): void; applyAcceptedHunks(): Promise<void>; closeFile(): void
 
 // git slice

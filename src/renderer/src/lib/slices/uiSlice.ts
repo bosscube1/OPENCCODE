@@ -16,9 +16,13 @@ export type UiSlice = Pick<
   | 'activeView'
   | 'theme'
   | 'activeArtifactID'
+  | 'panelTab'
+  | 'paletteOpen'
   | 'setActiveView'
   | 'setTheme'
   | 'setActiveArtifactID'
+  | 'setPanelTab'
+  | 'setPaletteOpen'
   | 'replyPermission'
   | 'dismissError'
 >
@@ -30,9 +34,19 @@ export function createUiSlice(set: SetState, get: GetState): UiSlice {
     activeView: 'chats',
     theme: 'auto' as Theme,
     activeArtifactID: null,
+    panelTab: null,
+    paletteOpen: false,
 
     setActiveView(view: 'chats' | 'projects' | 'images'): void {
       set({ activeView: view })
+    },
+
+    setPanelTab(tab: AppState['panelTab']): void {
+      set({ panelTab: tab })
+    },
+
+    setPaletteOpen(open: boolean): void {
+      set({ paletteOpen: open })
     },
 
     setTheme(t: Theme): void {
