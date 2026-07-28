@@ -2,7 +2,7 @@
  * Typing for the preload bridge. Kept structurally identical to CONTRACTS.md and to
  * `src/renderer/src/lib/types.ts` (which owns the renderer-side copies of these shapes).
  */
-import type { Message, Part, Permission, Provider, Session } from '@opencode-ai/sdk'
+import type { Command, Message, Part, Permission, Provider, Session, Todo } from '@opencode-ai/sdk'
 
 export type ServerStatus = {
   running: boolean
@@ -340,11 +340,11 @@ export interface OpencodeApi {
     update(directory: string, id: string, title: string): Promise<Session>
     summarize(a: SummarizeArgs): Promise<boolean>
     init(a: InitArgs): Promise<boolean>
-    todos(directory: string, sessionID: string): Promise<unknown[]>
+    todos(directory: string, sessionID: string): Promise<Todo[]>
     command(a: CommandArgs): Promise<void>
   }
   commands: {
-    list(directory: string): Promise<unknown[]>
+    list(directory: string): Promise<Command[]>
   }
   find: {
     files(directory: string, query: string): Promise<string[]>
