@@ -5,6 +5,8 @@ import { formatDuration } from '../lib/format'
 import { highlightCode } from '../lib/highlight'
 import { findFileRefs } from '../lib/filelinks'
 import { useStore } from '../lib/store'
+import { store } from '../lib/slices/storeRef'
+import { errText } from '../lib/slices/api'
 
 /* ------------------------------------------------------------------ *
  * Defensive narrowing. `input` is Record<string, unknown> — never cast.
@@ -111,10 +113,11 @@ const FILE_LINK_STYLE = {
 } as const
 
 function openInEditor(directory: string, path: string, line?: number, column?: number): void {
-  void window.api.openEditor({ directory, path, line, column }).catch(() => {
+  void window.api.openEditor({ directory, path, line, column }).catch((e: unknown) => {
     // Best-effort: the user's editor may not be installed, or the path may no longer be
-    // contained in the active project. Silently ignored — this is a convenience link, not a
-    // required action.
+    // contained in the active project. Not fatal to the session, but a silent no-op left
+    // the user clicking a dead link with zero feedback — surface it as a system notice.
+    store().getState().addSystemNotice(`Could not open ${path} in your editor: ${errText(e)}`)
   })
 }
 
