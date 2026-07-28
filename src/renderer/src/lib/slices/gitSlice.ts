@@ -175,6 +175,7 @@ export function createGitSlice(set: SetState, get: GetState): GitSlice {
           set({ error: errText(e) })
           return ''
         }
+        if (!status) return ''
       }
 
       const staged = status.entries.filter((entry) => entry.index !== null)

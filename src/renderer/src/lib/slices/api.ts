@@ -101,14 +101,14 @@ export interface OpencodeApi {
     write(a: { directory: string; path: string; text: string; baseSha: string }): Promise<{ sha: string }>
   }
   git: {
-    status(directory: string): Promise<GitStatus>
+    status(directory: string): Promise<GitStatus | null>
     diff(a: { directory: string; path: string; staged?: boolean }): Promise<FileDiff>
-    stage(directory: string, paths: string[]): Promise<GitStatus>
-    unstage(directory: string, paths: string[]): Promise<GitStatus>
-    stageHunks(a: { directory: string; path: string; patch: string }): Promise<GitStatus>
+    stage(directory: string, paths: string[]): Promise<GitStatus | null>
+    unstage(directory: string, paths: string[]): Promise<GitStatus | null>
+    stageHunks(a: { directory: string; path: string; patch: string }): Promise<GitStatus | null>
     commit(a: { directory: string; message: string; amend?: boolean }): Promise<{ sha: string }>
     branches(directory: string): Promise<GitBranch[]>
-    checkout(a: { directory: string; branch: string; create?: boolean }): Promise<GitStatus>
+    checkout(a: { directory: string; branch: string; create?: boolean }): Promise<GitStatus | null>
     remoteUrl(directory: string): Promise<string | null>
   }
   term: {

@@ -94,12 +94,13 @@ const itGit = (name: string, fn: () => void | Promise<void>): void => {
 describe('getStatus', () => {
   itGit('reports a clean repo with its branch', async () => {
     const status = await getStatus(repo)
-    expect(status.branch).toBe('main')
-    expect(status.clean).toBe(true)
-    expect(status.entries).toEqual([])
-    expect(status.ahead).toBe(0)
-    expect(status.behind).toBe(0)
-    expect(status.upstream).toBeNull()
+    expect(status).not.toBeNull()
+    expect(status!.branch).toBe('main')
+    expect(status!.clean).toBe(true)
+    expect(status!.entries).toEqual([])
+    expect(status!.ahead).toBe(0)
+    expect(status!.behind).toBe(0)
+    expect(status!.upstream).toBeNull()
   })
 
   itGit('splits the staged and unstaged sides', async () => {
@@ -109,10 +110,11 @@ describe('getStatus', () => {
     file('README.md', 'hello world again\n')
 
     const status = await getStatus(repo)
-    expect(status.clean).toBe(false)
-    const readme = status.entries.find((e) => e.path === 'README.md')
+    expect(status).not.toBeNull()
+    expect(status!.clean).toBe(false)
+    const readme = status!.entries.find((e) => e.path === 'README.md')
     expect(readme).toMatchObject({ index: 'modified', worktree: 'modified' })
-    const fresh = status.entries.find((e) => e.path === 'new.txt')
+    const fresh = status!.entries.find((e) => e.path === 'new.txt')
     expect(fresh).toMatchObject({ index: null, worktree: 'untracked' })
   })
 
@@ -121,7 +123,7 @@ describe('getStatus', () => {
     file('日本語/メモ.md', 'x\n')
     // NTFS forbids `"` in filenames, so the quoted-path case is POSIX-only.
     if (process.platform !== 'win32') file('quote"name.txt', 'x\n')
-    const paths = (await getStatus(repo)).entries.map((e) => e.path)
+    const paths = (await getStatus(repo))!.entries.map((e) => e.path)
     expect(paths).toContain('a file with spaces.txt')
     expect(paths).toContain('日本語/メモ.md')
     if (process.platform !== 'win32') expect(paths).toContain('quote"name.txt')
@@ -130,7 +132,8 @@ describe('getStatus', () => {
   itGit('reports renames with their original path', async () => {
     git('mv', 'README.md', 'READYOU.md')
     const status = await getStatus(repo)
-    const entry = status.entries.find((e) => e.index === 'renamed')
+    expect(status).not.toBeNull()
+    const entry = status!.entries.find((e) => e.index === 'renamed')
     expect(entry).toBeDefined()
     expect(entry?.path).toBe('READYOU.md')
     expect(entry?.renamedFrom).toBe('README.md')
@@ -292,9 +295,11 @@ describe('stage and unstage', () => {
   itGit('stages and unstages a path with spaces', async () => {
     file('a file.txt', 'x\n')
     let status = await stagePaths(repo, ['a file.txt'])
-    expect(status.entries.find((e) => e.path === 'a file.txt')?.index).toBe('added')
+    expect(status).not.toBeNull()
+    expect(status!.entries.find((e) => e.path === 'a file.txt')?.index).toBe('added')
     status = await unstagePaths(repo, ['a file.txt'])
-    expect(status.entries.find((e) => e.path === 'a file.txt')?.worktree).toBe('untracked')
+    expect(status).not.toBeNull()
+    expect(status!.entries.find((e) => e.path === 'a file.txt')?.worktree).toBe('untracked')
   })
 
   itGit('treats a leading-dash filename as a pathspec, never an option', async () => {
@@ -302,7 +307,8 @@ describe('stage and unstage', () => {
     const name = '--upload-pack=evil'
     file(name, 'inert\n')
     const status = await stagePaths(repo, [name])
-    expect(status.entries.find((e) => e.path === name)?.index).toBe('added')
+    expect(status).not.toBeNull()
+    expect(status!.entries.find((e) => e.path === name)?.index).toBe('added')
   })
 
   itGit('rejects staging paths outside the session directory', async () => {
@@ -323,7 +329,8 @@ describe('stageHunks', () => {
       ''
     ].join('\n')
     const status = await stageHunks(repo, 'README.md', patch)
-    expect(status.entries.find((e) => e.path === 'README.md')?.index).toBe('modified')
+    expect(status).not.toBeNull()
+    expect(status!.entries.find((e) => e.path === 'README.md')?.index).toBe('modified')
   })
 
   itGit('refuses a patch that reaches outside the target file', async () => {
@@ -377,7 +384,7 @@ describe('commit', () => {
     await stagePaths(repo, ['c.txt'])
     const { sha } = await commit(repo, 'add c', false)
     expect(sha).toMatch(/^[0-9a-f]{40}$/)
-    expect((await getStatus(repo)).clean).toBe(true)
+    expect((await getStatus(repo))!.clean).toBe(true)
   })
 
   itGit('treats a message beginning with dashes as a message, not options', async () => {
@@ -413,8 +420,9 @@ describe('branches and checkout', () => {
 
   itGit('creates and switches branches', async () => {
     const status = await checkout(repo, 'feature/new-thing', true)
-    expect(status.branch).toBe('feature/new-thing')
-    expect((await checkout(repo, 'main', false)).branch).toBe('main')
+    expect(status).not.toBeNull()
+    expect(status!.branch).toBe('feature/new-thing')
+    expect((await checkout(repo, 'main', false))!.branch).toBe('main')
   })
 })
 
@@ -463,7 +471,7 @@ describe('branch-name validation (argument injection)', () => {
       /invalid branch name/i
     )
     expect(existsSync(sentinel)).toBe(true)
-    expect((await getStatus(repo)).branch).toBe('main')
+    expect((await getStatus(repo))!.branch).toBe('main')
   })
 })
 

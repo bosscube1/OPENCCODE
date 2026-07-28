@@ -389,14 +389,33 @@ export function parsePorcelainStatus(raw: string): GitStatus {
   return { branch, upstream, ahead, behind, entries, clean: entries.length === 0 }
 }
 
-export async function getStatus(directory: string): Promise<GitStatus> {
-  const { stdout } = await runGit(directory, [
-    'status',
-    '--porcelain=v1',
-    '-z',
-    '--branch',
-    '--untracked-files=all'
-  ])
+/**
+ * True when git failed only because the directory is not a repository.
+ *
+ * A project folder with no git in it is an ordinary, expected state — managed
+ * project directories start that way. It must read as "no repo here", not as an
+ * error banner containing raw git output.
+ */
+export function isNotARepoError(e: unknown): boolean {
+  const message = e instanceof Error ? e.message : String(e)
+  return /not a git repository|detected dubious ownership/i.test(message)
+}
+
+/** Returns null when `directory` is not a git repository. Mirrors `oc:vcs:get`. */
+export async function getStatus(directory: string): Promise<GitStatus | null> {
+  let stdout: string
+  try {
+    ;({ stdout } = await runGit(directory, [
+      'status',
+      '--porcelain=v1',
+      '-z',
+      '--branch',
+      '--untracked-files=all'
+    ]))
+  } catch (e) {
+    if (isNotARepoError(e)) return null
+    throw e
+  }
   return parsePorcelainStatus(stdout)
 }
 
@@ -556,7 +575,7 @@ export async function getDiff(
   const { stdout } = await runGit(directory, args)
   if (stdout.trim().length === 0 && !staged) {
     const status = await getStatus(directory)
-    const entry = status.entries.find((e) => e.path === rel)
+    const entry = status?.entries.find((e) => e.path === rel)
     if (entry && entry.worktree === 'untracked') return untrackedDiff(directory, rel)
   }
   if (stdout.trim().length === 0) return { path: rel, binary: false, truncated: false, hunks: [] }
@@ -567,7 +586,7 @@ export async function getDiff(
 /* stage / unstage / stageHunks                                        */
 /* ------------------------------------------------------------------ */
 
-export async function stagePaths(directory: string, paths: readonly string[]): Promise<GitStatus> {
+export async function stagePaths(directory: string, paths: readonly string[]): Promise<GitStatus | null> {
   // Containment is enforced here, not only at the IPC boundary, so the exported
   // function is safe for any caller.
   const rels = paths.map((p) => relPathWithin(directory, p))
@@ -576,7 +595,7 @@ export async function stagePaths(directory: string, paths: readonly string[]): P
   return getStatus(directory)
 }
 
-export async function unstagePaths(directory: string, paths: readonly string[]): Promise<GitStatus> {
+export async function unstagePaths(directory: string, paths: readonly string[]): Promise<GitStatus | null> {
   const rels = paths.map((p) => relPathWithin(directory, p))
   try {
     await runGit(directory, ['restore', '--staged', '--', ...rels])
@@ -614,7 +633,7 @@ export async function stageHunks(
   directory: string,
   path: string,
   patch: string
-): Promise<GitStatus> {
+): Promise<GitStatus | null> {
   const rel = relPathWithin(directory, path)
   if (Buffer.byteLength(patch, 'utf8') > MAX_PATCH_BYTES) {
     throw new Error('Patch is too large to apply.')
@@ -655,12 +674,19 @@ export async function commit(
 }
 
 export async function listBranches(directory: string): Promise<GitBranch[]> {
-  const { stdout } = await runGit(directory, [
-    'for-each-ref',
-    '--format=%(refname)%09%(refname:short)%09%(HEAD)',
-    'refs/heads',
-    'refs/remotes'
-  ])
+  let stdout: string
+  try {
+    ;({ stdout } = await runGit(directory, [
+      'for-each-ref',
+      '--format=%(refname)%09%(refname:short)%09%(HEAD)',
+      'refs/heads',
+      'refs/remotes'
+    ]))
+  } catch (e) {
+    // No repo means no branches, not a failure worth surfacing.
+    if (isNotARepoError(e)) return []
+    throw e
+  }
   const branches: GitBranch[] = []
   for (const line of stdout.split('\n')) {
     if (line.trim().length === 0) continue
@@ -677,7 +703,7 @@ export async function checkout(
   directory: string,
   branch: string,
   create: boolean
-): Promise<GitStatus> {
+): Promise<GitStatus | null> {
   // Validated here as well as at the IPC boundary; a name that survives this cannot
   // start with `-`, so it can never be re-read as an option.
   if (!isValidBranchName(branch)) throw new Error(`Invalid branch name: ${branch}`)
@@ -733,7 +759,7 @@ export async function getRemoteUrl(directory: string): Promise<string | null> {
 /* ------------------------------------------------------------------ */
 
 export function register(ipc: IpcMain): void {
-  ipc.handle('oc:git:status', async (_event, directoryArg: unknown): Promise<GitStatus> => {
+  ipc.handle('oc:git:status', async (_event, directoryArg: unknown): Promise<GitStatus | null> => {
     return getStatus(requireDirectory(directoryArg))
   })
 
@@ -743,19 +769,19 @@ export function register(ipc: IpcMain): void {
     return getDiff(directory, requireString(args.path, 'path'), optionalBoolean(args.staged, 'staged'))
   })
 
-  ipc.handle('oc:git:stage', async (_event, argsArg: unknown): Promise<GitStatus> => {
+  ipc.handle('oc:git:stage', async (_event, argsArg: unknown): Promise<GitStatus | null> => {
     const args = requireObject(argsArg, 'git stage args')
     const directory = requireDirectory(args.directory)
     return stagePaths(directory, requirePathList(args.paths))
   })
 
-  ipc.handle('oc:git:unstage', async (_event, argsArg: unknown): Promise<GitStatus> => {
+  ipc.handle('oc:git:unstage', async (_event, argsArg: unknown): Promise<GitStatus | null> => {
     const args = requireObject(argsArg, 'git unstage args')
     const directory = requireDirectory(args.directory)
     return unstagePaths(directory, requirePathList(args.paths))
   })
 
-  ipc.handle('oc:git:stageHunks', async (_event, argsArg: unknown): Promise<GitStatus> => {
+  ipc.handle('oc:git:stageHunks', async (_event, argsArg: unknown): Promise<GitStatus | null> => {
     const args = requireObject(argsArg, 'git stageHunks args')
     const directory = requireDirectory(args.directory)
     return stageHunks(
@@ -779,7 +805,7 @@ export function register(ipc: IpcMain): void {
     return listBranches(requireDirectory(directoryArg))
   })
 
-  ipc.handle('oc:git:checkout', async (_event, argsArg: unknown): Promise<GitStatus> => {
+  ipc.handle('oc:git:checkout', async (_event, argsArg: unknown): Promise<GitStatus | null> => {
     const args = requireObject(argsArg, 'git checkout args')
     const directory = requireDirectory(args.directory)
     return checkout(directory, requireBranchName(args.branch), optionalBoolean(args.create, 'create'))
