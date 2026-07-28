@@ -7,6 +7,8 @@ import type { Message, Part, Permission, Provider, Session } from '@opencode-ai/
 export type ServerStatus = {
   running: boolean
   url: string | null
+  /** SSE subscription is live. Independent of `running` — see CONTRACTS.md. */
+  streamConnected: boolean
   error?: string
 }
 

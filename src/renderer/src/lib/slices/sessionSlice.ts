@@ -61,7 +61,7 @@ export type SessionSlice = Pick<
 
 export function createSessionSlice(set: SetState, get: GetState): SessionSlice {
   return {
-    server: { running: false, url: null },
+    server: { running: false, url: null, streamConnected: false },
     directory: null,
     sessions: [],
     activeSessionID: null,

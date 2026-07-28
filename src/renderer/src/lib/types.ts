@@ -199,7 +199,13 @@ export type PromptPart =
 export type MessageWithParts = { info: Message; parts: Part[] }
 
 /** Status of the `opencode serve` child process, owned by the main process. */
-export type ServerStatus = { running: boolean; url: string | null; error?: string }
+export type ServerStatus = {
+  running: boolean
+  url: string | null
+  /** SSE subscription is live. Independent of `running` — see CONTRACTS.md. */
+  streamConnected: boolean
+  error?: string
+}
 
 /** Answer to a permission request. */
 export type PermissionResponse = 'once' | 'always' | 'reject'

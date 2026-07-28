@@ -105,8 +105,8 @@ Channel names are literal strings. Renderer calls them through `window.api` (pre
 Every handler returns `Promise<T>` and **throws** on failure (renderer catches).
 
 ```ts
-'oc:status'            () => { running: boolean; url: string | null; error?: string }
-'oc:restart'           () => { running: boolean; url: string | null; error?: string }
+'oc:status'            () => { running: boolean; url: string | null; streamConnected: boolean; error?: string }
+'oc:restart'           () => { running: boolean; url: string | null; streamConnected: boolean; error?: string }
 'oc:pickDirectory'     () => string | null              // native folder dialog
 'oc:sessions:list'     (directory: string) => Session[]
 'oc:sessions:create'   (directory: string, title?: string) => Session
@@ -255,7 +255,12 @@ export type UpdateStatus =
 
 ```ts
 'oc:event'                 (event: { type: string; properties: any })   // every SSE event, verbatim
-'oc:server'                (status: { running: boolean; url: string | null; error?: string })
+'oc:server'                (status: { running: boolean; url: string | null; streamConnected: boolean; error?: string })
+//   `running` means the HTTP server answers. `streamConnected` means the SSE
+//   subscription is live. They are independent: the stream can drop and
+//   silently reconnect (500ms..10s backoff) while the server stays up, during
+//   which no events arrive. The UI must distinguish the two or it shows a
+//   healthy dot on an app that has stopped responding to the agent.
 'main-menu:new-session'    ()   // File > New Session menu / Ctrl+N accelerator
 ```
 
@@ -1143,9 +1148,10 @@ refreshTree(): Promise<void>               // debounced ~300ms; re-fetches root 
 
 // editor slice
 openFile: FileContent | null; openFileDirty: boolean
+openFileBaseText: string | null            // last on-disk text; the baseline openFileDirty compares against
 openFileDiff: FileDiff | null; acceptedHunkIds: string[]
 openPath(path: string, line?: number): Promise<void>
-setOpenFileText(text: string): void        // buffer an edit, sets openFileDirty
+setOpenFileText(text: string): void        // buffer an edit; openFileDirty = text !== openFileBaseText
 saveOpenFile(): Promise<void>              // writes via oc:fs:write; THROWS on baseSha conflict
 toggleHunk(id: string): void; applyAcceptedHunks(): Promise<void>; closeFile(): void
 

@@ -16,6 +16,7 @@ export type EditorSlice = Pick<
   AppState,
   | 'openFile'
   | 'openFileDirty'
+  | 'openFileBaseText'
   | 'openFileDiff'
   | 'acceptedHunkIds'
   | 'openPath'
@@ -30,6 +31,7 @@ export function createEditorSlice(set: SetState, get: GetState): EditorSlice {
   return {
     openFile: null,
     openFileDirty: false,
+    openFileBaseText: null,
     openFileDiff: null,
     acceptedHunkIds: [],
 
@@ -42,7 +44,12 @@ export function createEditorSlice(set: SetState, get: GetState): EditorSlice {
 
       try {
         const content = await api().fs.read(directory, path)
-        set({ openFile: content, openFileDirty: false, acceptedHunkIds: [] })
+        set({
+          openFile: content,
+          openFileDirty: false,
+          openFileBaseText: content.text,
+          acceptedHunkIds: []
+        })
       } catch (e) {
         set({ error: errText(e) })
         return
@@ -60,7 +67,7 @@ export function createEditorSlice(set: SetState, get: GetState): EditorSlice {
     setOpenFileText(text: string): void {
       set((state) =>
         state.openFile
-          ? { openFile: { ...state.openFile, text }, openFileDirty: text !== state.openFile.text }
+          ? { openFile: { ...state.openFile, text }, openFileDirty: text !== state.openFileBaseText }
           : {}
       )
     },
@@ -79,7 +86,14 @@ export function createEditorSlice(set: SetState, get: GetState): EditorSlice {
           baseSha: openFile.sha
         })
         set((state) =>
-          state.openFile ? { openFile: { ...state.openFile, sha }, openFileDirty: false } : {}
+          state.openFile
+            ? {
+                openFile: { ...state.openFile, sha },
+                openFileDirty: false,
+                // The buffer is now what is on disk, so it becomes the baseline.
+                openFileBaseText: state.openFile.text
+              }
+            : {}
         )
       } catch (e) {
         const message = errText(e)
@@ -133,7 +147,12 @@ export function createEditorSlice(set: SetState, get: GetState): EditorSlice {
           text,
           baseSha: openFile.sha
         })
-        set({ openFile: { ...openFile, text, sha }, openFileDirty: false, acceptedHunkIds: [] })
+        set({
+          openFile: { ...openFile, text, sha },
+          openFileDirty: false,
+          openFileBaseText: text,
+          acceptedHunkIds: []
+        })
       } catch (e) {
         set({ error: errText(e) })
         return
@@ -144,7 +163,13 @@ export function createEditorSlice(set: SetState, get: GetState): EditorSlice {
     },
 
     closeFile(): void {
-      set({ openFile: null, openFileDirty: false, openFileDiff: null, acceptedHunkIds: [] })
+      set({
+        openFile: null,
+        openFileDirty: false,
+        openFileBaseText: null,
+        openFileDiff: null,
+        acceptedHunkIds: []
+      })
     }
   }
 }

@@ -148,6 +148,13 @@ export interface AppState {
   // editor slice
   openFile: FileContent | null
   openFileDirty: boolean
+  /**
+   * The file's text as last read from or written to disk. `openFileDirty` is
+   * this compared against the live buffer — comparing against the previous
+   * buffer instead would clear the flag whenever an edit happens to repeat the
+   * text before it, while the buffer still differs from disk.
+   */
+  openFileBaseText: string | null
   openFileDiff: FileDiff | null
   acceptedHunkIds: string[]
   openPath(path: string, line?: number): Promise<void>

@@ -5,7 +5,13 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { Message, Part, Permission, Provider, Session } from '@opencode-ai/sdk'
 
-export type ServerStatus = { running: boolean; url: string | null; error?: string }
+export type ServerStatus = {
+  running: boolean
+  url: string | null
+  /** SSE subscription is live. Independent of `running` — see CONTRACTS.md. */
+  streamConnected: boolean
+  error?: string
+}
 export type MessageWithParts = { info: Message; parts: Part[] }
 export type PermissionResponse = 'once' | 'always' | 'reject'
 export type OcEvent = { type: string; properties: unknown }
