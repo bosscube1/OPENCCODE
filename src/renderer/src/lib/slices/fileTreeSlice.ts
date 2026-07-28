@@ -13,8 +13,35 @@ import type { FileNode } from '../types'
 
 export type FileTreeSlice = Pick<
   AppState,
-  'treeRoot' | 'treeExpanded' | 'treeLoading' | 'loadTree' | 'toggleTreeDir'
+  'treeRoot' | 'treeExpanded' | 'treeLoading' | 'loadTree' | 'toggleTreeDir' | 'refreshTree'
 >
+
+const REFRESH_DEBOUNCE_MS = 300
+
+let refreshTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * Re-fetch the root level and every expanded directory, then rebuild `treeRoot` from
+ * only what came back. Rebuilding (rather than merging into the old list) is what makes
+ * deletions disappear; the levels are fetched together so a partially-failed refresh
+ * leaves the previous tree untouched instead of half-erasing it.
+ */
+async function doRefreshTree(set: SetState, get: GetState): Promise<void> {
+  const { directory, treeExpanded } = get()
+  if (!directory) return
+
+  // A collapsed-then-reopened dir refetches through toggleTreeDir, so only currently
+  // expanded levels are worth the round-trip.
+  const levels = [undefined, ...treeExpanded]
+  try {
+    const results = await Promise.all(levels.map((path) => api().fs.tree(directory, path)))
+    let nodes: FileNode[] = []
+    for (const level of results) nodes = mergeNodes(nodes, level ?? [])
+    set({ treeRoot: nodes })
+  } catch (e) {
+    set({ error: errText(e) })
+  }
+}
 
 /** Merge a freshly-fetched level into the flat node list, deduped by path. */
 function mergeNodes(existing: FileNode[], incoming: FileNode[]): FileNode[] {
@@ -43,6 +70,18 @@ export function createFileTreeSlice(set: SetState, get: GetState): FileTreeSlice
       } finally {
         set({ treeLoading: false })
       }
+    },
+
+    refreshTree(): Promise<void> {
+      // Same debounce shape as refreshGit: a burst of agent edits collapses into one
+      // sweep ~300ms after the last one.
+      return new Promise((resolve) => {
+        if (refreshTimer) clearTimeout(refreshTimer)
+        refreshTimer = setTimeout(() => {
+          refreshTimer = null
+          void doRefreshTree(set, get).finally(resolve)
+        }, REFRESH_DEBOUNCE_MS)
+      })
     },
 
     async toggleTreeDir(path: string): Promise<void> {

@@ -19,6 +19,7 @@ export type GitSlice = Pick<
   AppState,
   | 'gitStatus'
   | 'gitBranches'
+  | 'gitStatusFor'
   | 'refreshGit'
   | 'stagePaths'
   | 'unstagePaths'
@@ -37,7 +38,10 @@ async function doRefreshGit(set: SetState, get: GetState): Promise<void> {
   if (!directory) return
   try {
     const [status, branches] = await Promise.all([api().git.status(directory), api().git.branches(directory)])
-    set({ gitStatus: status, gitBranches: branches ?? [] })
+    // `status === null` is the main process reporting "not a git repository" — a normal
+    // state, not an error. Recording the directory it was resolved for lets the panel
+    // tell that apart from "the first fetch has not landed yet".
+    set({ gitStatus: status, gitBranches: branches ?? [], gitStatusFor: directory })
   } catch (e) {
     set({ error: errText(e) })
   }
@@ -47,6 +51,7 @@ export function createGitSlice(set: SetState, get: GetState): GitSlice {
   return {
     gitStatus: null,
     gitBranches: [],
+    gitStatusFor: null,
 
     refreshGit(): Promise<void> {
       return new Promise((resolve) => {

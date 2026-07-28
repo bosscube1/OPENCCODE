@@ -1139,6 +1139,7 @@ export function findFileRefs(text: string, directory: string): Array<{ path: str
 // fileTree slice
 treeRoot: FileNode[]; treeExpanded: Set<string>; treeLoading: boolean
 loadTree(path?: string): Promise<void>; toggleTreeDir(path: string): Promise<void>
+refreshTree(): Promise<void>               // debounced ~300ms; re-fetches root + expanded dirs, keeps expansion
 
 // editor slice
 openFile: FileContent | null; openFileDirty: boolean
@@ -1150,6 +1151,7 @@ toggleHunk(id: string): void; applyAcceptedHunks(): Promise<void>; closeFile(): 
 
 // git slice
 gitStatus: GitStatus | null; gitBranches: GitBranch[]
+gitStatusFor: string | null                // directory the last status resolved for; null gitStatus + match === not a repo
 refreshGit(): Promise<void>; stagePaths(paths: string[]): Promise<void>
 unstagePaths(paths: string[]): Promise<void>
 checkoutBranch(branch: string, create?: boolean): Promise<void>
@@ -1167,8 +1169,9 @@ setPanelTab(tab: AppState['panelTab']): void
 paletteOpen: boolean; setPaletteOpen(open: boolean): void
 ```
 
-`refreshGit()` is debounced (300 ms) and is triggered by the existing `file.edited` SSE event —
-the agent editing a file must update the git panel without polling.
+`refreshGit()` and `refreshTree()` are each debounced (300 ms) and are both triggered by the
+existing `file.edited` SSE event — the agent editing a file must update the git panel, and an
+agent creating or deleting one must update the file tree, without polling.
 
 ### CSS namespaces
 

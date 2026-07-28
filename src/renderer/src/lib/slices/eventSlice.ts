@@ -374,6 +374,9 @@ export function createEventSlice(set: SetState, get: GetState): EventSlice {
           // polling; refreshGit() is debounced (~300ms) internally so a burst of edits
           // collapses into a single status/branches round-trip.
           void get().refreshGit()
+          // Same reasoning for the tree: an agent that creates or deletes a file must
+          // not require a manual reload to show it. Also debounced (~300ms).
+          void get().refreshTree()
           return
         }
 

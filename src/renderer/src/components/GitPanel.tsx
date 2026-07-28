@@ -89,6 +89,7 @@ export function GitPanel(): JSX.Element {
   const directory = useStore((s) => s.directory)
   const gitStatus = useStore((s) => s.gitStatus)
   const gitBranches = useStore((s) => s.gitBranches)
+  const gitStatusFor = useStore((s) => s.gitStatusFor)
   const refreshGit = useStore((s) => s.refreshGit)
   const stagePaths = useStore((s) => s.stagePaths)
   const commit = useStore((s) => s.commit)
@@ -167,7 +168,14 @@ export function GitPanel(): JSX.Element {
   }
 
   if (!gitStatus) {
-    return (
+    // A resolved fetch for THIS directory that produced no status means the folder
+    // simply is not a repository — a normal state, not a stuck spinner.
+    return gitStatusFor === directory ? (
+      <div className="panel__empty">
+        <p>This folder is not a git repository.</p>
+        <p>Run `git init` in it, or open a folder that is under version control.</p>
+      </div>
+    ) : (
       <div className="panel__empty">
         <p>Loading git status…</p>
       </div>

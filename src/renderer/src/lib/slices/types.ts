@@ -138,6 +138,12 @@ export interface AppState {
   treeLoading: boolean
   loadTree(path?: string): Promise<void>
   toggleTreeDir(path: string): Promise<void>
+  /**
+   * Re-fetch the root level plus every currently expanded directory, keeping the
+   * expansion state intact. Debounced (~300ms); driven by the `file.edited` SSE
+   * event so agent-created/deleted files appear without a manual reload.
+   */
+  refreshTree(): Promise<void>
 
   // editor slice
   openFile: FileContent | null
@@ -156,6 +162,12 @@ export interface AppState {
   // git slice
   gitStatus: GitStatus | null
   gitBranches: GitBranch[]
+  /**
+   * The directory a git status fetch has actually completed for, or null before the
+   * first one lands. Disambiguates `gitStatus === null`: still loading (this !==
+   * directory) vs. the folder is not a git repository (this === directory).
+   */
+  gitStatusFor: string | null
   refreshGit(): Promise<void>
   stagePaths(paths: string[]): Promise<void>
   unstagePaths(paths: string[]): Promise<void>
