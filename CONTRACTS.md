@@ -1162,7 +1162,7 @@ startTerminal(): Promise<void>; setActiveTermID(id: TermId | null): void
 killTerminal(id: TermId): Promise<void>
 
 // ui slice
-panelTab: 'editor' | 'git' | 'terminal' | 'artifacts' | null   // null = panel collapsed
+panelTab: 'files' | 'editor' | 'git' | 'terminal' | 'artifacts' | null   // null = panel collapsed
 setPanelTab(tab: AppState['panelTab']): void
 paletteOpen: boolean; setPaletteOpen(open: boolean): void
 ```

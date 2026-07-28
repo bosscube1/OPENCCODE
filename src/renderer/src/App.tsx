@@ -12,8 +12,27 @@ import { ArtifactsPanel } from './components/ArtifactsPanel'
 import { ProjectView } from './components/ProjectView'
 import { ImagesView } from './components/ImagesView'
 import { LiveScreenAssistant } from './components/LiveScreenAssistant'
+import { FileTree } from './components/FileTree'
+import { EditorPanel } from './components/EditorPanel'
+import { GitPanel } from './components/GitPanel'
+import { TerminalPanel } from './components/TerminalPanel'
+import { CommandPalette } from './components/CommandPalette'
 import { useStore } from './lib/store'
+import type { AppState } from './lib/slices/types'
+import './components/panels.css'
 import './index.css'
+
+type PanelTab = AppState['panelTab']
+
+/** Tab order in the right-hand code-surface panel. */
+const PANEL_TABS = ['files', 'editor', 'git', 'terminal', 'artifacts'] as const
+const PANEL_LABELS: Record<(typeof PANEL_TABS)[number], string> = {
+  files: 'Files',
+  editor: 'Editor',
+  git: 'Git',
+  terminal: 'Terminal',
+  artifacts: 'Artifacts'
+}
 
 /** localStorage key for the persisted sidebar width. */
 const SIDEBAR_KEY = 'opencode-desktop:sidebar'
@@ -101,6 +120,9 @@ export function App(): JSX.Element {
   const theme = useStore((s) => s.theme)
   const activeArtifactID = useStore((s) => s.activeArtifactID)
   const activeView = useStore((s) => s.activeView)
+  const panelTab = useStore((s) => s.panelTab)
+  const setPanelTab = useStore((s) => s.setPanelTab)
+  const setActiveArtifactID = useStore((s) => s.setActiveArtifactID)
 
   const [width, setWidth] = useState<number>(() => readStoredWidth())
   const [restarting, setRestarting] = useState(false)
@@ -203,8 +225,21 @@ export function App(): JSX.Element {
         e.preventDefault()
         void useStore.getState().pickDirectory()
       } else if (key === 'k') {
+        // Ctrl+K stays on the model picker. The command palette takes Ctrl+P /
+        // Ctrl+Shift+P instead: rebinding a shortcut that is already in the
+        // user's fingers costs more than it gains.
         e.preventDefault()
         window.dispatchEvent(new Event(FOCUS_MODEL_EVENT))
+      } else if (key === 'p') {
+        e.preventDefault()
+        useStore.getState().setPaletteOpen(!useStore.getState().paletteOpen)
+      } else if (key === 'b') {
+        e.preventDefault()
+        const { panelTab, setPanelTab } = useStore.getState()
+        setPanelTab(panelTab === null ? 'editor' : null)
+      } else if (key === '`') {
+        e.preventDefault()
+        useStore.getState().setPanelTab('terminal')
       } else if (key === ',') {
         e.preventDefault()
         window.dispatchEvent(new Event(TOGGLE_SETTINGS_EVENT))
@@ -285,7 +320,12 @@ export function App(): JSX.Element {
     )
   }
 
-  const panelOpen = activeView === 'chats' && Boolean(activeArtifactID)
+  // The right column hosts the Phase 1 code surface as well as the original
+  // Artifacts panel. `panelTab` is the explicit selection; an artifact opening
+  // still implies the artifacts tab, preserving the pre-Phase-1 behaviour.
+  const effectivePanelTab: PanelTab =
+    panelTab ?? (activeArtifactID !== null ? 'artifacts' : null)
+  const panelOpen = activeView === 'chats' && effectivePanelTab !== null
 
   if (liveScreenOpen) return <LiveScreenAssistant onClose={() => setLiveScreenOpen(false)} />
 
@@ -337,11 +377,46 @@ export function App(): JSX.Element {
       </main>
 
       {panelOpen && (
-        <div className="app__panel">
-          <ArtifactsPanel />
+        <div className="app__panel panel">
+          <div className="panel__tabs" role="tablist" aria-label="Code surface">
+            {PANEL_TABS.map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                role="tab"
+                aria-selected={effectivePanelTab === tab}
+                className={
+                  effectivePanelTab === tab ? 'panel__tab panel__tab--active' : 'panel__tab'
+                }
+                onClick={() => setPanelTab(tab)}
+              >
+                {PANEL_LABELS[tab]}
+              </button>
+            ))}
+            <button
+              type="button"
+              className="panel__tab panel__tab--close"
+              onClick={() => {
+                setPanelTab(null)
+                setActiveArtifactID(null)
+              }}
+              title="Close panel (Ctrl+B)"
+              aria-label="Close panel"
+            >
+              ×
+            </button>
+          </div>
+          <div className="panel__body">
+            {effectivePanelTab === 'files' && <FileTree />}
+            {effectivePanelTab === 'editor' && <EditorPanel />}
+            {effectivePanelTab === 'git' && <GitPanel />}
+            {effectivePanelTab === 'terminal' && <TerminalPanel />}
+            {effectivePanelTab === 'artifacts' && <ArtifactsPanel />}
+          </div>
         </div>
       )}
 
+      <CommandPalette />
       <StatusBar />
     </div>
   )

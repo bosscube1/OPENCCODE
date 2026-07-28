@@ -238,7 +238,7 @@ svg {
 
 /* reserved slot for a future Artifacts-style side panel; 0-width until active */
 .app--panel {
-  grid-template-columns: var(--sidebar-w) 5px 1fr min(420px, 38vw);
+  grid-template-columns: var(--sidebar-w) 5px 1fr clamp(var(--panel-min-w), var(--panel-w), 48vw);
 }
 
 .app__panel {

@@ -174,7 +174,7 @@ export interface AppState {
   killTerminal(id: TermId): Promise<void>
 
   // ui slice — panel additions
-  panelTab: 'editor' | 'git' | 'terminal' | 'artifacts' | null
+  panelTab: 'files' | 'editor' | 'git' | 'terminal' | 'artifacts' | null
   setPanelTab(tab: AppState['panelTab']): void
   paletteOpen: boolean
   setPaletteOpen(open: boolean): void
