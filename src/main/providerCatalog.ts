@@ -16,6 +16,19 @@ export type ProviderCatalogEntry = {
 
 export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
   {
+    providerID: 'nanogpt',
+    envVar: 'NANOGPT_API_KEY',
+    label: 'NanoGPT (subscription)',
+    docsUrl: 'https://docs.nano-gpt.com/',
+    // Tests against the SUBSCRIPTION model list, not /api/v1/models: a 200 here proves both that the
+    // key is valid and that the subscription endpoint this app routes through is reachable.
+    test: {
+      url: 'https://nano-gpt.com/api/subscription/v1/models',
+      authHeader: 'Authorization',
+      authScheme: 'Bearer'
+    }
+  },
+  {
     providerID: 'google',
     envVar: 'GEMINI_API_KEY',
     label: 'Google Gemini',

@@ -170,7 +170,21 @@ Every handler returns `Promise<T>` and **throws** on failure (renderer catches).
                           { ok: boolean; status?: number; detail?: string }
                         // live-pings the provider's test endpoint with the
                         // decrypted key; key never logged or returned.
+
+// --- NanoGPT: subscription catalogue + quota ---
+'oc:nanogpt:models'     () => NanogptModelsResult   // cached, no network
+'oc:nanogpt:refresh'    () => NanogptRefreshResult  // re-fetch both catalogues
+'oc:nanogpt:usage'      () => NanoUsage             // live subscription quota
+
+// --- NanoGPT: image generation (SPENDS MONEY — see the guard rules below) ---
+'oc:nanogpt:generate'   (args: NanogptGenerateArgs) => NanogptGenerateResult
+'oc:nanogpt:images:list'   (sessionID?: string) => GeneratedImageMeta[]  // METADATA ONLY
+'oc:nanogpt:images:read'   (id: string) => string | null                // base64 PNG
+'oc:nanogpt:images:delete' (id: string) => void
 ```
+
+`oc:saveFile` gained an optional `encoding?: 'utf8' | 'base64'` (defaults to `'utf8'`, so existing
+callers are unaffected) so generated PNGs can be written as bytes.
 
 `KeyRow` (exported from `src/preload/index.ts`, importable by the renderer):
 
@@ -354,6 +368,105 @@ error message, or crash file — errors reference only the providerID/envVar.
 `src/main/providerCatalog.ts` (Stream 3C) for the providerID → envVar mapping and per-provider
 `test` endpoints.
 
+## NanoGPT provider (subscription-scoped)
+
+NanoGPT is not an OpenCode built-in. It is registered as an OpenCode **custom provider** whose block
+is generated in `src/main/nanogptConfig.ts` and injected into the child process as
+`OPENCODE_CONFIG_CONTENT` at spawn (`server.ts` `doStart()`, via the new `buildChildEnv(providerVars,
+extraVars)` second parameter). `src/main/nanogpt.ts` is the REST client and the ONLY module that
+talks to `nano-gpt.com`.
+
+**DECISION — env injection, NOT writing `opencode.json`.** Verified against opencode 1.18.4:
+`OPENCODE_CONFIG_CONTENT` **deep-merges** with project/global config — a project `opencode.json`
+carrying `instructions: ["knowledge/**/*.md"]` survives injection intact. Env injection keeps the
+generated block ephemeral and never mutates a user-owned config file.
+
+**DECISION — subscription-scoped `baseURL`.** `options.baseURL` is pinned to
+`https://nano-gpt.com/api/subscription/v1` and `models` is populated solely from
+`GET /api/subscription/v1/models?detailed=true`. Both the catalogue **and** the billing path are
+therefore subscription-scoped: no pay-per-token model is reachable under `nanogpt/`, even by typing
+its id. That invariant is the sole justification for the `'subscription'` verdict in `freeTier.ts`.
+
+`options.apiKey` is the literal placeholder `{env:NANOGPT_API_KEY}` — OpenCode substitutes it from
+the child env. **The generated config never contains a key value** and is safe to log.
+
+Per-model capability keys, verified empirically against `/config/providers`:
+
+| Config key | Resolved capability | Default for a custom provider |
+|---|---|---|
+| `tool_call` (snake) | `capabilities.toolcall` | `true` |
+| `attachment` | `capabilities.attachment` | `false` |
+| `reasoning` | `capabilities.reasoning` | `false` |
+| `temperature` | `capabilities.temperature` | `false` |
+| `modalities: { input: [], output: [] }` | `capabilities.input.*` / `output.*` | text only |
+
+Writing `toolcall` instead of `tool_call` is **silently ignored**. `cost` resolves to all-zeros for a
+custom provider, which is exactly the false positive the `cost == 0` free-model predicate was
+rejected for — `isFreeModel` classifies by provider, never by cost.
+
+Cache: `userData/nanogpt-models.json`,
+`{ version: 1, fetchedAt, chat[], image[], balanceBilled[] }`. Missing/corrupt reads as empty and
+never throws. `refreshCatalogs()` fetches both catalogues before writing, so a failure leaves the
+existing cache untouched; `restartRequired` compares chat-model **id sets** because the generated
+block is only read at spawn.
+
+**Bootstrap ordering.** On a fresh install there is no key → no cache → no provider. `ProviderPanel`
+lists `nanogpt` in `BUILTIN_PROVIDERS` so the key can be entered anyway, and `handleSave` runs
+`keys.set` → `nanogpt.refresh()` → `restart()` in that order. Refreshing after the restart would
+inject an empty model map.
+
+`balanceBilled` records image model ids observed to bill the pay-as-you-go balance rather than the
+subscription. NanoGPT exposes **no** API field marking per-image-model subscription inclusion (the
+help page states the included set varies), so the generation response's `paymentSource` is the only
+machine-readable ground truth and inclusion is learned empirically.
+
+## NanoGPT image generation
+
+`src/main/nanogptImages.ts` owns the on-disk gallery; `src/main/nanogptBilling.ts` is a dependency-free
+module holding the one rule that decides whether the app spends money again.
+
+**Billing is three-valued** — `classifyBilling(paymentSource)` → `'subscription' | 'balance' |
+'unknown'`. An **absent** `paymentSource` is `'unknown'`, never assumed to be balance: assuming the
+worst would blacklist every model after one generation and break image support outright if NanoGPT
+stopped sending the field. Only positive evidence blacklists. The renderer keeps a deliberate second
+copy in `src/renderer/src/lib/imageModels.ts` (main and renderer cannot share modules, as with the
+duplicated types); **keep the two in step.**
+
+`oc:nanogpt:generate` guards, in order:
+1. `prompt` ≤ 4000 chars; `n` ∈ 1..4; `size` from a fixed allowlist.
+2. `model` MUST be a member of the cached image catalogue — no arbitrary passthrough to a paid API.
+3. Refused when `nanogptSubscriptionOnly` and the model is in `balanceBilled`, unless the call passes
+   explicit `allowBalance: true`. The renderer never sets that flag implicitly.
+4. **Serialised per model** via an in-flight set. The blacklist can only reject a model whose billing
+   is already known, and billing only becomes known when a generation returns — so two concurrent
+   calls on an untested model would both pass step 3 and both spend, across a window as wide as a full
+   generation. The second call is refused so it sees the first call's verdict.
+
+The first generation on an untested model is an unavoidable probe; the UI labels it as such rather
+than hiding it.
+
+**Storage.** PNGs live in `userData/nanogpt-images/<uuid>.png` with an `index.json` of
+`GeneratedImageMeta`, capped at 500 retained (oldest pruned from index *and* disk). `reconcile()`
+drops entries whose file vanished and orphan PNGs. An `id` arriving from the renderer is validated
+against `/^[a-f0-9-]{16,64}$/i` plus a `basename` identity check before it reaches a path — an
+allowlist, not a traversal blocklist.
+
+**Why base64 crosses IPC rather than a path.** The renderer CSP is `img-src 'self' data: blob:` and
+the renderer is served from `file://` in production, so a `file://` URL into userData is not
+same-origin and would be blocked. `images:list` therefore returns **metadata only** and
+`images:read` fetches bytes on demand; the Images view loads tiles lazily via IntersectionObserver
+with a concurrency cap, and session rehydration is bounded to the 12 most recent (and says so in the
+transcript when it truncates).
+
+**Rendering reuses existing machinery.** `makeImageNotice` in `collections.ts` builds a synthetic
+assistant message with a text caption plus one `file` part per image (`mime: 'image/png'`, `url` a
+`data:` URI). `MessageView` already renders image file parts as thumbnails backed by
+`ImageLightbox`, so there is no bespoke image-rendering path. These messages have no server-side
+counterpart, which is why they must be rehydrated from the index on `selectSession`.
+
+New CSS namespace: `.images` in `src/renderer/src/components/images.css`. No new global tokens.
+`activeView` is now `'chats' | 'projects' | 'images'`.
+
 ## Shared renderer types — `src/renderer/src/lib/types.ts` (Agent B owns)
 
 ```ts
@@ -440,9 +553,21 @@ interface AppState {
   editAndResend(messageID: string, newText: string): Promise<void>
   // Smart routing v2 (Module 4)
   modelPool: string[] | null               // candidate "providerID/modelID" pairs; null = default pool
-  stickyModel: boolean                     // keep selected model if healthy
-  toggleStickyModel(): void
+  stickyModel: boolean                     // derived from routingMode ('failover') for legacy readers
+  toggleStickyModel(): void                // legacy — flips routingMode failover ↔ locked
   setModelPool(pool: string[] | null): void
+
+  // Reactive-failover routing (Intelligent Auto Model Router)
+  routingMode: 'locked' | 'failover' | 'auto'  // failover (default) uses your pick, swaps only on 429/stall
+  setRoutingMode(mode: RoutingMode): void
+  showPaidModels: boolean                  // reveals paid models in picker; auto-failover NEVER picks paid
+  setShowPaidModels(v: boolean): void
+
+  // Chosen/effective split (R4): pinned* is user intent, providerID/modelID is what's currently running.
+  // Only setModel mutates pinned*. rotateToNextFreeModel mutates providerID/modelID only.
+  pinnedProviderID: string | null
+  pinnedModelID: string | null
+  revertToPinned(): void                   // click target for the failover chip in StatusBar
 }
 ```
 
@@ -453,12 +578,14 @@ interface AppState {
 - `message.removed` / `message.part.removed` — remove by id.
 - `permission.updated` — push `properties` onto `permissions` if not already present by `id`.
 - `permission.replied` — drop the matching permission by `permissionID`.
-- `session.idle` — `busy = false` when `properties.sessionID === activeSessionID`. Record success in routing ledger.
-- `session.error` — set `error` from `properties.error`, `busy = false`. Record 429 in routing ledger if rate limit error.
+- `session.idle` — `busy = false` when `properties.sessionID === activeSessionID`. Record success in routing ledger. Reset `rotateRetries` ONLY on clean completion (no failover in flight, R2).
+- `session.error` — classify error via `classifyError`; if rate-limit, honor `Retry-After` / `X-RateLimit-Reset` from `error.data.responseHeaders`; single-entry `beginFailover` reverts the user message (transactional, R1+R3) then re-prompts on next healthy free model. Never auto-retry if any tool ran or tokens streamed (R1).
 - `session.created` / `session.updated` / `session.deleted` — sync the `sessions` array.
 - Ignore events whose `sessionID` is not the active session (except session list churn).
 
-Persist `directory`, `providerID`, `modelID`, `autoRotate`, `theme`, `modelPool`, `stickyModel` to `localStorage` under key `opencode-desktop:prefs`.
+Persist `directory`, `providerID`, `modelID`, `autoRotate`, `theme`, `modelPool`, `stickyModel`, `routingMode`, `showPaidModels` to `localStorage` under key `opencode-desktop:prefs`. On load, `loadPrefs` migrates the legacy `autoRotate` + `stickyModel` booleans into `routingMode` (`stickyModel:true` → `'failover'`, `autoRotate:false` → `'locked'`, else `'failover'`) and prunes any persisted paid provider/model when `showPaidModels` is false. Legacy booleans are still written for one release for downgrade safety.
+
+`AppSettings` (main-process, persisted under `app-settings.json`) additionally carries `showPaidModels`, `ttftMs` (min 5000, default 20 000), `stallMs` (min 10 000, default 90 000). The renderer store mirrors these into `AppState.appSettings`; the two watchdogs read the current values at arming time so config changes take effect on the next attempt.
 
 ## Projects (Module 6)
 
@@ -536,22 +663,159 @@ export type ModelCapsMap = Record<string, ProviderCaps>
 
 export const DEFAULT_PROVIDER_CAPS: ModelCapsMap
 
-export function record429(ledger: Ledger, key: ModelKey, now: number): Ledger
+// record429 accepts an optional retryAfterMs (from provider Retry-After header).
+// When present, cooldown is set to min(retryAfterMs, 120s). Otherwise falls back
+// to exponential backoff: 30s doubling up to 30 min (R8 fix).
+export function record429(ledger: Ledger, key: ModelKey, now: number, retryAfterMs?: number): Ledger
 export function recordSuccess(ledger: Ledger, key: ModelKey, latencyMs: number, now: number): Ledger
 export function recordFailure(ledger: Ledger, key: ModelKey, now: number): Ledger
+export function recordTimeout(ledger: Ledger, key: ModelKey, now: number): Ledger
+export function reserveAttempt(ledger: Ledger, key: ModelKey, now: number): Ledger
+// releaseAttempt removes the most recent send timestamp — for catch blocks that
+// fail before dispatch completes so the reservation doesn't count against caps (R9).
+export function releaseAttempt(ledger: Ledger, key: ModelKey): Ledger
+
+// Provider-level (sums across all models of a provider) — kept for legacy call sites.
 export function underRateCaps(ledger: Ledger, key: ModelKey, caps: ModelCapsMap, now: number): boolean
+// Model-level (counts only this specific model) — for per-model throttling checks (R9).
+export function underModelRateCaps(ledger: Ledger, key: ModelKey, caps: ModelCapsMap, now: number): boolean
+
 export function selectModel(
   pool: ModelKey[] | null,
   ledger: Ledger,
   caps: ModelCapsMap,
   now: number,
-  opts: { sticky: boolean; current: ModelKey | null; available: Set<ModelKey> }
+  opts: {
+    sticky: boolean
+    current: ModelKey | null
+    available: ReadonlySet<ModelKey>
+    authenticatedProviders: ReadonlySet<string>
+  }
 ): ModelKey | null
+// selectModel hard-floor (R11): skips any candidate with ≥5 total attempts and <20% success ratio.
+// Scoring: healthScore ∈ [-∞, 1] dominates; coding quality contributes at most 0.12 (normalized from /6),
+// so a healthy model always outranks a broken high-quality one.
+
 export function loadLedger(): Ledger
 export function saveLedger(ledger: Ledger): void
 ```
 
 Storage: `localStorage` key `opencode-desktop:routing-ledger`.
+
+### Free-tier registry — `src/renderer/src/lib/freeTier.ts`
+
+Curated ranked list of tool-calling-capable free models (S / A / B / C tiers), verified against
+models.dev + provider docs 2026-07-22. Everything downstream — `PREFERRED_MODELS`, `pickDefaultModel`,
+`codingQuality`, `RoutingPanel`, and the picker's free filter — derives from this table.
+
+The predicate is four-valued as of the NanoGPT landing: `'quota' | 'zero-price' | 'subscription' |
+'never'`. `'subscription'` returns `true` for the provider's ENTIRE catalogue and is deliberately not
+model-gated (the catalogue is fetched live and changes without a desktop release). Only add a
+provider to `SUBSCRIPTION_PROVIDERS` when its exposed catalogue and billing path are both
+subscription-scoped — see the NanoGPT section above. `isSubscriptionProvider(providerID)` is exported
+for UI badging.
+
+```ts
+export type Tier = 'S' | 'A' | 'B' | 'C'
+export type TaskKind = 'code' | 'title' | 'summary' | 'commit'
+
+export interface FreeTierEntry {
+  providerID: string
+  modelID: string
+  tier: Tier
+  rpm: number
+  rpd: number | null // null = opaque quota (e.g. Google)
+  note: string
+}
+
+export const FREE_MODEL_TIERS: readonly FreeTierEntry[]
+
+// Three-valued predicate: quota-providers use the allowlist; openrouter/huggingface use
+// zero-price detection with :free-suffix fallback; every other provider is never free.
+// Rejects the broken `cost == 0` predicate — SDK Model.cost defaults to 0 for unknowns.
+export function isFreeModel(providerID: string, modelID: string, cost?: { input: number; output: number } | null): boolean
+
+// Sub-pools by task kind. 'code' → S+A; 'title'/'summary'/'commit' → C+B (save quota).
+// NOTE: taskKind wiring for internal paths (sessions.summarize, /commit, /compact) is out of scope
+// for this landing — the pool selector is ready but call sites still route through 'code'.
+export function poolForTask(task: TaskKind): readonly FreeTierEntry[]
+
+export const FREE_PROVIDER_CAPS: ModelCapsMap        // seed caps (google rpm:10, groq rpm:30 rpd:1000, …)
+export const FREE_PREFERRED_MODELS                   // ordered S→A, drives PREFERRED_MODELS
+export const FREE_FALLBACK_PROVIDER_ORDER            // drives FALLBACK_PROVIDER_ORDER
+export function freeCodingQuality(providerID, modelID): number | null   // tier-based (S=5 … C=2)
+```
+
+### Structured error classifier — `src/renderer/src/lib/rotation.ts`
+
+Replaces the old `isRateLimitError` substring matcher. Rejects false-positive `overloaded` /
+`capacity` as rate limits (R10), splits daily quota (`rpd-drop`) from per-minute (`rpm-wait`),
+supports `statusCode` + `isRetryable` from SDK ApiError:
+
+```ts
+export type ErrorClass = 'rpm-wait' | 'rpd-drop' | 'timeout' | 'transient' | 'client' | 'server'
+export function classifyError(
+  errStr: string,
+  opts?: { statusCode?: number; isRetryable?: boolean; retryAfterMs?: number }
+): ErrorClass
+
+/** @deprecated Wrapper over classifyError. Kept for one release. */
+export function isRateLimitError(errStr: string): boolean
+```
+
+### Attempt state machine — `src/renderer/src/lib/attempts.ts`
+
+Pure reducer + effect descriptors specifying the correct failover semantics. Store.ts implements
+the same semantics inline; the reducer + 31 unit tests are the executable spec:
+
+```ts
+export interface AttemptState {
+  attemptId: number
+  messageID: string | null
+  chosenProviderID / chosenModelID: string | null          // user pin
+  effectiveProviderID / effectiveModelID: string | null    // currently running
+  retries: number  maxRetries: number                       // per-exchange, reset on clean idle
+  toolExecuted: boolean  hasStreamed: boolean               // R1 side-effect guards
+  ttftMs: number  stallMs: number
+  watchdog: 'ttft' | 'stall' | 'paused' | 'idle'
+  pauseReason: 'tool' | 'permission' | 'retry' | null       // R5
+  failoverInFlight: boolean                                 // R3 single-entry guard
+  history: FailoverRecord[]
+  taskKind: TaskKind
+}
+
+export type AttemptEvent =
+  | { type: 'send' | 'stream' | 'tool_started' | 'tool_completed'
+      | 'permission_asked' | 'permission_replied'
+      | 'session_retry' | 'session_retry_done'
+      | 'idle' | 'abort' | 'set_chosen'
+      | 'error' | 'ttft_fired' | 'stall_fired' | 'failover_complete', … }
+
+export type Effect =
+  | 'arm_ttft' | 'arm_stall' | 'clear_timer'
+  | 'begin_failover' | 'wait_and_retry_same' | 'transient_retry'
+  | 'stop' | 'continue_with_next'
+
+export function attemptReducer(state, event): { state, effects[] }
+export function isFailedOver(state): boolean
+export function canAutoRetry(state): boolean
+```
+
+### Store integration (Module 7)
+
+`store.ts` runs a mirror machine over module-level `activeAttempt` — same fixes, no reducer import,
+so all edits stay local. Highlights:
+
+- Single-entry `beginFailover(sessionID, directory, text, parts, reason)` — the ONLY retry path.
+  Guards: `failoverInFlight`, `rotateRetries < 3`, `!toolExecuted && !hasStreamed`, revert succeeds.
+- Transactional: `await api().revertMessage({ …, messageID: lastPrompt.userMessageID })` before every re-send.
+- Two watchdogs: TTFT (arm on send, clear on first text/reasoning part) and stall (re-arm on each new part;
+  paused during `pauseForTool` / `pauseForPermission` / `session.status.type === 'retry'`).
+- `parseRetryAfterMs()` consumes `Retry-After`, `X-RateLimit-Reset`, and `X-RateLimit-Reset-After` from
+  the SDK's `ApiError.data.responseHeaders`. No main-process changes required — the SDK type already
+  plumbs these; the old renderer cast just discarded them.
+- `rotateToNextFreeModel` filters by `isFreeModel` and mutates only `providerID`/`modelID` (never
+  `pinnedProviderID`/`pinnedModelID` or prefs). Failover chip in StatusBar shows the delta.
 
 ## Artifacts Side Panel — `src/renderer/src/lib/artifacts.ts` (Module 5)
 
@@ -628,7 +892,7 @@ and imports it from `Chat.tsx`. Design tokens both use, defined by Agent D in `i
 
 ```
 --bg, --bg-alt, --bg-inset, --fg, --fg-dim, --border, --accent, --accent-fg,
---danger, --warn, --ok, --radius, --mono
+--danger, --warn, --ok, --press, --radius, --mono
 ```
 
 Additional tokens (Agent D owns, added on top of the contract set above — do not remove
@@ -659,6 +923,286 @@ Palette (dark is default; light applies under `[data-theme='light']` and under
 Reserved right panel: `.app` grid has a 4th `panel` column, collapsed to `0px` width by
 default. Adding the `.app--panel` class to the root `.app` element expands that column
 (currently unused — reserved for a future Artifacts panel). No component renders into it yet.
+
+## Phase 1 — Code surface (fs / git / terminal / editor deep-links)
+
+Adds a review surface: a scoped file tree, a Monaco diff panel with hunk-level accept/reject, a
+real terminal, and a git panel. **This is a review surface, not an IDE** — single-file editing,
+no multi-tab workspace, no debugger. Anything beyond reviewing and steering agent output is out
+of scope.
+
+**Process ownership is unchanged.** All filesystem, git and PTY work happens in **main**. The
+renderer never touches `node:fs`, never shells out, and never holds a PTY handle.
+
+**Module registration pattern (new).** Each new main-process service exports
+`register(ipc: IpcMain): void` and owns its own handlers. `ipc.ts` calls `register()` once per
+service and adds the channel names to `CHANNELS`. Services never import each other.
+
+```ts
+// src/main/fsService.ts, gitService.ts, terminal.ts
+export function register(ipc: IpcMain): void
+```
+
+### Shared types (exported from `src/preload/index.ts`, importable by the renderer)
+
+```ts
+export type GitFileStatus =
+  | 'untracked' | 'modified' | 'added' | 'deleted' | 'renamed' | 'conflicted' | 'ignored'
+
+export type FileNode = {
+  name: string
+  path: string                  // POSIX-separated, ALWAYS relative to the session directory
+  kind: 'file' | 'dir'
+  gitStatus: GitFileStatus | null
+  touched: boolean              // edited by the agent during this session
+}
+
+export type FileContent = {
+  path: string
+  text: string
+  bytes: number
+  truncated: boolean            // true when the file exceeded MAX_READ_BYTES
+  sha: string                   // sha256 of the on-disk bytes; the concurrency token
+  language: string | null       // Monaco language id, inferred from extension
+}
+
+export type DiffLine = { kind: 'ctx' | 'add' | 'del'; text: string }
+
+export type Hunk = {
+  id: string                    // stable within one FileDiff: `${oldStart}-${newStart}`
+  header: string                // "@@ -a,b +c,d @@"
+  oldStart: number; oldLines: number
+  newStart: number; newLines: number
+  lines: DiffLine[]
+  // Set when that side ends without a trailing newline ("\ No newline at end of file").
+  // Load-bearing, not cosmetic: without it, applying a file's final hunk silently
+  // appends a newline that was never in the source.
+  oldNoEofNewline?: boolean
+  newNoEofNewline?: boolean
+}
+
+export type FileDiff = {
+  path: string
+  oldPath?: string              // set on renames
+  binary: boolean               // when true, `hunks` is empty
+  truncated: boolean            // true when hunks were dropped at the 5000-line cap
+  hunks: Hunk[]
+}
+
+export type GitStatusEntry = {
+  path: string
+  index: GitFileStatus | null       // staged side
+  worktree: GitFileStatus | null    // unstaged side
+  renamedFrom?: string
+}
+
+export type GitStatus = {
+  branch: string
+  upstream: string | null
+  ahead: number
+  behind: number
+  entries: GitStatusEntry[]
+  clean: boolean
+}
+
+export type GitBranch = { name: string; current: boolean; remote: boolean }
+
+export type TermId = string
+```
+
+### Invoke channels
+
+```ts
+// --- filesystem (src/main/fsService.ts) ---
+'oc:fs:tree'    (args: { directory: string; path?: string; depth?: number }) => FileNode[]
+                // LAZY, one level by default (depth 1, max 3). Never a full recursive walk —
+                // a 200k-file repo must not block the main process. Sorted dirs-first, then
+                // name. Honours .gitignore. Returns a flat array; consumers must reconstruct
+                // nesting from the `path` field and must not rely on array order (merges from
+                // multiple levels may append out of sequence).
+'oc:fs:read'    (args: { directory: string; path: string }) => FileContent
+                // Refuses binaries (NUL byte in the first 8 KB). Truncates past MAX_READ_BYTES
+                // (2 MiB) and sets `truncated`.
+'oc:fs:write'   (args: { directory: string; path: string; text: string; baseSha: string })
+                  => { sha: string }
+                // Optimistic concurrency: THROWS if the on-disk sha256 !== baseSha, so an
+                // in-flight agent edit is never silently clobbered by the editor panel.
+                // Renderer catches and offers reload-or-overwrite.
+
+// --- git (src/main/gitService.ts) ---
+'oc:git:status'     (directory: string) => GitStatus
+'oc:git:diff'       (args: { directory: string; path: string; staged?: boolean }) => FileDiff
+'oc:git:stage'      (args: { directory: string; paths: string[] }) => GitStatus
+'oc:git:unstage'    (args: { directory: string; paths: string[] }) => GitStatus
+'oc:git:stageHunks' (args: { directory: string; path: string; patch: string }) => GitStatus
+                    // `patch` is a unified diff built in the renderer by lib/hunks.ts and
+                    // applied with `git apply --cached -` over stdin.
+'oc:git:commit'     (args: { directory: string; message: string; amend?: boolean })
+                      => { sha: string }
+'oc:git:branches'   (directory: string) => GitBranch[]
+'oc:git:checkout'   (args: { directory: string; branch: string; create?: boolean }) => GitStatus
+'oc:git:remoteUrl'  (directory: string) => string | null   // normalised https URL, for PR links
+
+// --- terminal (src/main/terminal.ts) ---
+'oc:term:start'  (args: { directory: string; cols: number; rows: number }) => { id: TermId }
+'oc:term:write'  (args: { id: TermId; data: string }) => void
+'oc:term:resize' (args: { id: TermId; cols: number; rows: number }) => void
+'oc:term:kill'   (id: TermId) => void
+
+// --- external editor deep link ---
+'oc:openEditor'  (args: { directory: string; path: string; line?: number; column?: number }) => void
+```
+
+### Send channels (main -> renderer)
+
+```ts
+'oc:term:data' ({ id: TermId; data: string })      // PTY output, base64-free UTF-8 chunks
+'oc:term:exit' ({ id: TermId; code: number })
+```
+
+### Preload bridge additions (`window.api`)
+
+```ts
+fs: {
+  tree(directory: string, path?: string, depth?: number): Promise<FileNode[]>
+  read(directory: string, path: string): Promise<FileContent>
+  write(a: { directory: string; path: string; text: string; baseSha: string }): Promise<{ sha: string }>
+}
+git: {
+  status(directory: string): Promise<GitStatus>
+  diff(a: { directory: string; path: string; staged?: boolean }): Promise<FileDiff>
+  stage(directory: string, paths: string[]): Promise<GitStatus>
+  unstage(directory: string, paths: string[]): Promise<GitStatus>
+  stageHunks(a: { directory: string; path: string; patch: string }): Promise<GitStatus>
+  commit(a: { directory: string; message: string; amend?: boolean }): Promise<{ sha: string }>
+  branches(directory: string): Promise<GitBranch[]>
+  checkout(a: { directory: string; branch: string; create?: boolean }): Promise<GitStatus>
+  remoteUrl(directory: string): Promise<string | null>
+}
+term: {
+  start(a: { directory: string; cols: number; rows: number }): Promise<{ id: TermId }>
+  write(id: TermId, data: string): Promise<void>
+  resize(id: TermId, cols: number, rows: number): Promise<void>
+  kill(id: TermId): Promise<void>
+  onData(cb: (e: { id: TermId; data: string }) => void): () => void
+  onExit(cb: (e: { id: TermId; code: number }) => void): () => void
+}
+openEditor(a: { directory: string; path: string; line?: number; column?: number }): Promise<void>
+```
+
+### Security invariants — binding, not advisory
+
+1. **Path containment.** Every `path` arriving from the renderer is resolved against the session
+   `directory` and validated with `assertSubpath` from `src/main/projectsPaths.ts`. **Reuse it —
+   do not write a second containment check.** It already rejects traversal, absolute escapes, the
+   base directory itself, and existing symlink/reparse-point segments.
+2. **No shell string interpolation for git.** Every git invocation uses an **argv array** through
+   `execFile`, never a concatenated command string and never `shell: true`. A branch named
+   `; rm -rf /` must be inert.
+3. **Never push, never force.** `gitService` exposes no push, no `--force`, no `reset --hard`, no
+   history rewriting beyond `commit --amend`. Those are user actions in a real terminal.
+4. **PTY confinement.** `oc:term:start` pins `cwd` to the validated session directory and builds
+   its environment through the existing `ALLOWLIST`/`ALIASES` in `src/main/env.ts` — a terminal
+   must not inherit decrypted BYOK keys. Every PTY is killed on window close and on app quit;
+   PTY handles are keyed per `WebContents` so a reload cannot orphan one.
+5. **`oc:openEditor` is scheme-allowlisted.** Only `vscode://`, `vscode-insiders://`, and `cursor://`
+   URLs are constructed, and only from a contained path. The renderer never passes a URL — it passes
+   a path, and main builds the URL. This prevents `shell.openExternal` becoming an arbitrary-protocol
+   gadget. JetBrains support is not implemented (their IDEs use proprietary deep-link schemes like
+   `jetbrains://idea/navigate/reference?...` that require project-specific context).
+6. **Write concurrency.** `oc:fs:write` is the only renderer-driven write path and is gated on
+   `baseSha`. The agent's own edits go through OpenCode's tools as before and are unaffected.
+7. **Output bounds.** `oc:fs:read` caps at 2 MiB; `oc:git:diff` caps at 5 000 lines per file and
+   sets `binary` rather than streaming blobs; PTY output is chunked and back-pressured.
+
+### Renderer modules
+
+```ts
+// src/renderer/src/lib/hunks.ts — PURE. No store, no React, no IPC. Fully unit-tested.
+export function parseUnifiedDiff(text: string): FileDiff
+export function selectedHunksToPatch(diff: FileDiff, hunkIds: string[]): string
+export function applyHunksToText(original: string, diff: FileDiff, hunkIds: string[]): string
+// applyHunksToText backs "accept some hunks" in the editor; selectedHunksToPatch backs
+// "stage some hunks" through git apply --cached. Both must agree on hunk identity.
+
+// src/renderer/src/lib/filelinks.ts — PURE.
+export function findFileRefs(text: string, directory: string): Array<{ path: string; line?: number; column?: number; start: number; end: number }>
+// Recognises "src/foo.ts:42", "at src/foo.ts:42:7", and bare repo-relative paths. Used to
+// linkify tool output and stack traces. Must not match URLs or bare numbers.
+```
+
+### Store slices
+
+`store.ts` is split into slices under `src/renderer/src/lib/slices/` (see Phase 0). Phase 1 adds:
+
+```ts
+// fileTree slice
+treeRoot: FileNode[]; treeExpanded: Set<string>; treeLoading: boolean
+loadTree(path?: string): Promise<void>; toggleTreeDir(path: string): Promise<void>
+refreshTree(): Promise<void>               // debounced ~300ms; re-fetches root + expanded dirs, keeps expansion
+
+// editor slice
+openFile: FileContent | null; openFileDirty: boolean
+openFileDiff: FileDiff | null; acceptedHunkIds: string[]
+openPath(path: string, line?: number): Promise<void>
+setOpenFileText(text: string): void        // buffer an edit, sets openFileDirty
+saveOpenFile(): Promise<void>              // writes via oc:fs:write; THROWS on baseSha conflict
+toggleHunk(id: string): void; applyAcceptedHunks(): Promise<void>; closeFile(): void
+
+// git slice
+gitStatus: GitStatus | null; gitBranches: GitBranch[]
+gitStatusFor: string | null                // directory the last status resolved for; null gitStatus + match === not a repo
+refreshGit(): Promise<void>; stagePaths(paths: string[]): Promise<void>
+unstagePaths(paths: string[]): Promise<void>
+checkoutBranch(branch: string, create?: boolean): Promise<void>
+stageHunks(path: string, hunkIds: string[]): Promise<void>
+commit(message: string): Promise<void>; generateCommitMessage(): Promise<string>
+
+// terminal slice
+terminals: Array<{ id: TermId; title: string }>; activeTermID: TermId | null
+startTerminal(): Promise<void>; setActiveTermID(id: TermId | null): void
+killTerminal(id: TermId): Promise<void>
+
+// ui slice
+panelTab: 'files' | 'editor' | 'git' | 'terminal' | 'artifacts' | null   // null = panel collapsed
+setPanelTab(tab: AppState['panelTab']): void
+paletteOpen: boolean; setPaletteOpen(open: boolean): void
+```
+
+`refreshGit()` and `refreshTree()` are each debounced (300 ms) and are both triggered by the
+existing `file.edited` SSE event — the agent editing a file must update the git panel, and an
+agent creating or deleting one must update the file tree, without polling.
+
+### CSS namespaces
+
+New per-component stylesheets, imported from their own `.tsx`. No new global tokens beyond the
+two below; everything else reuses the existing token set.
+
+- `.tree`  → `src/renderer/src/components/tree.css`
+- `.editor` → `src/renderer/src/components/editor.css`
+- `.git`   → `src/renderer/src/components/git.css`
+- `.term`  → `src/renderer/src/components/term.css`
+- `.palette` → `src/renderer/src/components/palette.css`
+- `.panel` (shared panel chrome: tab strip, resizer, empty states) →
+  `src/renderer/src/components/panels.css`
+
+New global tokens (added to `index.css`):
+
+```
+--panel-w      default width of the right panel column when expanded (~34rem)
+--panel-min-w  minimum drag width (~22rem)
+```
+
+The reserved 4th `panel` grid column in `.app` becomes a **real, resizable, tabbed region**.
+`.app--panel` continues to expand it; the width is driven by `--panel-w`, persisted to prefs.
+
+### Dependencies added
+
+| Package | Used by | Risk |
+|---|---|---|
+| `monaco-editor` | editor panel | Large bundle; must be lazy-imported and locally bundled — no CDN (the renderer CSP forbids it). |
+| `xterm` + `xterm-addon-fit` | terminal UI | Low. |
+| `node-pty` | terminal backend | **HIGH — native module.** Requires a rebuild against Electron 43 ABI on Windows (ConPTY). This is spiked and go/no-go'd before any terminal UI work is scheduled. Fallback if it fails: a non-interactive `child_process` command runner with streamed output — degraded, but shippable, and the `oc:term:*` contract above is deliberately shaped so the fallback can satisfy it unchanged. |
 
 ## Conventions
 

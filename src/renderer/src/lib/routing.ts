@@ -4,6 +4,8 @@
  * Pure module, no store import, no React.
  */
 
+import { freeCodingQuality } from './freeTier'
+
 export type ModelKey = string // format "providerID/modelID"
 
 /**
@@ -58,12 +60,21 @@ const DEFAULT_HEALTH: ModelHealth = {
 
 /**
  * Record a 429 rate-limit error.
- * Implements exponential cooldown starting at 30s, doubling per consecutive 429, capped at 30 minutes.
+ *
+ * When `retryAfterMs` is provided (from a Retry-After header), it is used
+ * directly, capped at 120s. Otherwise exponential backoff applies: 30s
+ * initial, doubling per consecutive 429, capped at 30 minutes.
  */
-export function record429(ledger: Ledger, key: ModelKey, now: number): Ledger {
+export function record429(ledger: Ledger, key: ModelKey, now: number, retryAfterMs?: number): Ledger {
   const existing = ledger[key] ?? { ...DEFAULT_HEALTH }
-  const isConsecutive = existing.cooldownUntil > now || (existing.last429 !== null && now - existing.last429 <= existing.cooldownMs + 60000)
-  const newCooldownMs = isConsecutive ? Math.min(1800000, existing.cooldownMs * 2) : 30000
+
+  let newCooldownMs: number
+  if (retryAfterMs !== undefined) {
+    newCooldownMs = Math.min(120_000, Math.max(1000, retryAfterMs))
+  } else {
+    const isConsecutive = existing.cooldownUntil > now || (existing.last429 !== null && now - existing.last429 <= existing.cooldownMs + 60000)
+    newCooldownMs = isConsecutive ? Math.min(1800000, existing.cooldownMs * 2) : 30000
+  }
 
   return {
     ...ledger,
@@ -90,6 +101,22 @@ export function reserveAttempt(ledger: Ledger, key: ModelKey, now: number): Ledg
     [key]: {
       ...existing,
       sends
+    }
+  }
+}
+
+/**
+ * Release a reserved attempt that failed before dispatch completed.
+ * Removes the most recent send timestamp so it does not count against caps.
+ */
+export function releaseAttempt(ledger: Ledger, key: ModelKey): Ledger {
+  const existing = ledger[key]
+  if (!existing || existing.sends.length === 0) return ledger
+  return {
+    ...ledger,
+    [key]: {
+      ...existing,
+      sends: existing.sends.slice(0, -1)
     }
   }
 }
@@ -178,6 +205,33 @@ export function underRateCaps(ledger: Ledger, key: ModelKey, caps: ModelCapsMap,
 }
 
 /**
+ * Model-level rate cap check — counts only sends for this specific model,
+ * NOT all models from the same provider. Use when you need to know whether
+ * a specific model is individually throttled vs provider-wide throttling.
+ */
+export function underModelRateCaps(ledger: Ledger, key: ModelKey, caps: ModelCapsMap, now: number): boolean {
+  const parsed = parseModelKey(key)
+  if (!parsed) return false
+  const cap = caps[parsed.providerID]
+  if (!cap) return true
+
+  const health = ledger[key]
+  if (!health || health.sends.length === 0) return true
+
+  if (cap.rpm !== undefined) {
+    const rpmSends = health.sends.filter((t) => now - t <= 60000).length
+    if (rpmSends >= cap.rpm) return false
+  }
+
+  if (cap.rpd !== undefined) {
+    const rpdSends = health.sends.filter((t) => now - t <= 86400000).length
+    if (rpdSends >= cap.rpd) return false
+  }
+
+  return true
+}
+
+/**
  * Score and select the optimal model from a pool based on health ledger statistics.
  */
 export function selectModel(
@@ -209,7 +263,13 @@ export function selectModel(
     if (!opts.available.has(key) || !isAuthenticatedCandidate(key)) return false
     const health = ledger[key]
     const isOutofCooldown = !health || health.cooldownUntil <= now
-    return isOutofCooldown && underRateCaps(ledger, key, caps, now)
+    if (!isOutofCooldown || !underRateCaps(ledger, key, caps, now)) return false
+    // R11: hard floor — skip models with enough data and terrible success ratio
+    if (health) {
+      const total = health.success + health.error
+      if (total >= 5 && health.success / total < 0.2) return false
+    }
+    return true
   })
 
   if (healthyCandidates.length === 0) return null
@@ -221,10 +281,10 @@ export function selectModel(
     const latencyPenalty = h.latencyEwma !== null ? Math.min(1.0, h.latencyEwma / 5000) : 0.0
     const recent429Penalty = h.last429 !== null ? Math.max(0, 1 - (now - h.last429) / 3600000) : 0.0
 
-    // Health remains dominant; quality breaks close calls in favour of models
-    // intended for coding. The model ID is the final stable tie-breaker.
     const healthScore = successRatio - latencyPenalty * 0.3 - recent429Penalty * 0.5
-    const score = healthScore + codingQuality(key) * 0.2
+    // Normalize quality to [0, 0.12] so it cannot outweigh health (R11 fix)
+    const qualityNorm = codingQuality(key) / 6
+    const score = healthScore + qualityNorm * 0.12
     const deterministicRank = codingQuality(key)
 
     return { key, score, deterministicRank, poolIndex }
@@ -245,8 +305,13 @@ export function selectModel(
 export function codingQuality(key: ModelKey): number {
   const parsed = parseModelKey(key)
   if (!parsed) return 0
-  const id = `${parsed.providerID}/${parsed.modelID}`.toLowerCase()
 
+  // Prefer tier-based score from the curated free registry
+  const tierScore = freeCodingQuality(parsed.providerID, parsed.modelID)
+  if (tierScore !== null) return tierScore
+
+  // Regex fallback for paid / unknown models
+  const id = `${parsed.providerID}/${parsed.modelID}`.toLowerCase()
   if (/(gpt-5\.[45]|codex)/.test(id)) return 6
   if (/(gpt-5|claude.*opus)/.test(id)) return 5
   if (/claude.*sonnet/.test(id)) return 4

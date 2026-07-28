@@ -87,6 +87,17 @@ export default defineConfig({
         input: r('./src/renderer/index.html')
       }
     },
+    optimizeDeps: {
+      // monaco-editor@0.56 builds each of its workers (editorWorkerService, plus the
+      // json/css/html/typescript language workers) via
+      // `new Worker(new URL('<worker>.js', import.meta.url))` inside its own package
+      // source — no MonacoEnvironment config or CDN needed, Vite's asset pipeline
+      // bundles these as same-origin worker chunks (satisfies the CSP's
+      // `worker-src 'self' blob:`). esbuild's dev-mode dep pre-bundling does not
+      // apply that same-origin asset-URL rewrite, so excluding the package here is
+      // required for the worker URLs to resolve correctly against the dev server.
+      exclude: ['monaco-editor']
+    },
     server: {
       // Electron loads this URL in dev; keep it loopback-only.
       // Port may shift if 5173 is busy — electron-vite passes the real URL

@@ -33,6 +33,8 @@
   --serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
   --sidebar-w: 264px;
   --chat-max-w: 48rem;
+  --panel-w: 34rem;
+  --panel-min-w: 22rem;
   --shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
   --hover: rgba(255, 255, 255, 0.055);
   --press: rgba(255, 255, 255, 0.1);
@@ -236,7 +238,7 @@ svg {
 
 /* reserved slot for a future Artifacts-style side panel; 0-width until active */
 .app--panel {
-  grid-template-columns: var(--sidebar-w) 5px 1fr min(420px, 38vw);
+  grid-template-columns: var(--sidebar-w) 5px 1fr clamp(var(--panel-min-w), var(--panel-w), 48vw);
 }
 
 .app__panel {
@@ -473,6 +475,17 @@ body.app--resizing {
 
 .sidebar__search-input::placeholder {
   color: var(--fg-dim);
+}
+
+.sidebar__compare-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  cursor: pointer;
+  user-select: none;
 }
 
 .sidebar__rename-input {
@@ -1572,6 +1585,48 @@ body.app--resizing {
   height: 12px;
   background: var(--border);
   flex: 0 0 auto;
+}
+
+/* Code-surface entry points. Always visible: the panel's own tab strip only
+   exists once the panel is already open, so these are the way in. */
+.app__status-panels {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.app__status-panelbtn {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.app__status-panelbtn:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.app__status-panelbtn:active {
+  background: var(--press);
+}
+
+.app__status-panelbtn--active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--fg);
+}
+
+.app__status-panelbtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .app__status-strong {

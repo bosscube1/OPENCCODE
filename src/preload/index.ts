@@ -22,6 +22,11 @@ export type PromptArgs = {
   modelID: string
   text: string
   parts?: PromptPart[]
+  /**
+   * Per-request tool policy. Compare runs pass `{ write: false, edit: false, … }` so N concurrent
+   * columns cannot race on one working tree. Omit for normal chat.
+   */
+  tools?: Record<string, boolean>
 }
 
 export type PermissionReplyArgs = {
@@ -112,6 +117,11 @@ export type McpSnapshot = {
 export type AppSettings = {
   closeToTray: boolean
   globalShortcut: string
+  showPaidModels: boolean
+  ttftMs: number
+  stallMs: number
+  /** Refuse NanoGPT image generation on models observed to bill balance. Default true. */
+  nanogptSubscriptionOnly: boolean
 }
 export type AppSettingsResult = {
   settings: AppSettings
@@ -123,6 +133,182 @@ export type UpdateStatus =
   | { state: 'available'; version: string }
   | { state: 'progress'; percent: number }
   | { state: 'error'; message: string }
+export type GeminiLiveInput = {
+  audio?: { data: string; mimeType: 'audio/pcm;rate=16000' }
+  video?: { data: string; mimeType: 'image/jpeg' }
+  text?: string
+}
+/* --- NanoGPT (subscription provider + image sidecar) ---------------------- */
+
+export type NanoChatModel = {
+  id: string
+  name?: string
+  description?: string
+  context_length?: number
+  max_output_tokens?: number
+  capabilities?: { vision?: boolean; tool_calling?: boolean }
+}
+export type NanoImageModel = {
+  id: string
+  name?: string
+  description?: string
+  pricing?: unknown
+  supported_parameters?: string[]
+  tags?: string[]
+}
+export type NanogptModelsResult = {
+  chat: NanoChatModel[]
+  image: NanoImageModel[]
+  /** Image model ids observed to bill balance rather than the subscription. */
+  balanceBilled: string[]
+  fetchedAt: number
+}
+export type NanogptRefreshResult = {
+  chatCount: number
+  imageCount: number
+  /** True when the chat model set changed — the OpenCode server must restart to see it. */
+  restartRequired: boolean
+  fetchedAt: number
+}
+export type NanoUsage = {
+  active: boolean
+  limits: { daily: number; monthly: number }
+  enforceDailyLimit?: boolean
+  daily: { used: number; remaining: number; percentUsed: number; resetAt: number }
+  monthly: { used: number; remaining: number; percentUsed: number; resetAt: number }
+  state: string
+  graceUntil?: string | null
+}
+export type GeneratedImageMeta = {
+  id: string
+  sessionID: string | null
+  prompt: string
+  model: string
+  size?: string
+  paymentSource?: string
+  cost?: number
+  createdAt: number
+  bytes: number
+}
+export type NanogptGenerateArgs = {
+  prompt: string
+  model: string
+  n?: number
+  size?: string
+  /** Attach the generation to a chat session so the transcript can be rehydrated. */
+  sessionID?: string
+  /** Explicit per-call consent to bill the pay-as-you-go balance. Never defaults to true. */
+  allowBalance?: boolean
+}
+export type NanogptGenerateResult = {
+  images: Array<{ meta: GeneratedImageMeta; base64: string }>
+  billing: 'subscription' | 'balance' | 'unknown'
+  paymentSource?: string
+  cost?: number
+  remainingBalance?: number
+  route: 'subscription' | 'standard'
+  /** True when this call caused the model to be recorded as balance-billing. */
+  blacklisted: boolean
+}
+
+export type GeminiLiveEvent =
+  | { type: 'message'; data: unknown }
+  | { type: 'error'; message: string }
+  | { type: 'closed'; code: number; reason: string }
+
+/* --- Phase 1 code surface (fs / git / terminal / editor deep-links) -------
+ * Deliberately duplicated rather than imported from src/main/fsService.ts / gitService.ts
+ * (main must not be imported by preload — see CONTRACTS.md "Phase 1 — Code surface"). Kept
+ * structurally identical to the main-process service definitions. */
+
+export type GitFileStatus =
+  | 'untracked'
+  | 'modified'
+  | 'added'
+  | 'deleted'
+  | 'renamed'
+  | 'conflicted'
+  | 'ignored'
+
+export type FileNode = {
+  name: string
+  /** POSIX-separated, ALWAYS relative to the session directory. */
+  path: string
+  kind: 'file' | 'dir'
+  gitStatus: GitFileStatus | null
+  /** Edited by the agent during this session. */
+  touched: boolean
+}
+
+export type FileContent = {
+  path: string
+  text: string
+  bytes: number
+  /** True when the file exceeded MAX_READ_BYTES. */
+  truncated: boolean
+  /** sha256 of the on-disk bytes; the optimistic-concurrency token. */
+  sha: string
+  /** Monaco language id, inferred from extension. */
+  language: string | null
+}
+
+export type DiffLine = { kind: 'ctx' | 'add' | 'del'; text: string }
+
+export type Hunk = {
+  /** Stable within one FileDiff: `${oldStart}-${newStart}`. */
+  id: string
+  /** "@@ -a,b +c,d @@" */
+  header: string
+  oldStart: number
+  oldLines: number
+  newStart: number
+  newLines: number
+  lines: DiffLine[]
+  /**
+   * Set when that side ends without a trailing newline ("\ No newline at end of
+   * file"). Load-bearing: without it, applying a file's final hunk silently adds a
+   * newline that was never in the source.
+   */
+  oldNoEofNewline?: boolean
+  newNoEofNewline?: boolean
+}
+
+export type FileDiff = {
+  path: string
+  /** Set on renames. */
+  oldPath?: string
+  /** When true, `hunks` is empty. */
+  binary: boolean
+  /**
+   * True when the diff exceeded the 5000-line cap and hunks were dropped.
+   * The UI MUST surface this — a partial diff that looks complete lets the
+   * user stage "all hunks" and silently lose everything past the cap.
+   */
+  truncated: boolean
+  hunks: Hunk[]
+}
+
+export type GitStatusEntry = {
+  path: string
+  /** Staged side. */
+  index: GitFileStatus | null
+  /** Unstaged side. */
+  worktree: GitFileStatus | null
+  renamedFrom?: string
+}
+
+export type GitStatus = {
+  branch: string
+  upstream: string | null
+  ahead: number
+  behind: number
+  entries: GitStatusEntry[]
+  clean: boolean
+}
+
+export type GitBranch = { name: string; current: boolean; remote: boolean }
+
+export type TermId = string
 
 export interface OpencodeApi {
   status(): Promise<ServerStatus>
@@ -177,6 +363,28 @@ export interface OpencodeApi {
     remove(providerID: string): Promise<void>
     test(providerID: string): Promise<{ ok: boolean; status?: number; detail?: string }>
   }
+  live: {
+    start(): Promise<void>
+    send(input: GeminiLiveInput): void
+    stop(): Promise<void>
+    onMessage(cb: (event: GeminiLiveEvent) => void): () => void
+  }
+  nanogpt: {
+    /** Cached catalogues — cheap, synchronous in main, no network. */
+    models(): Promise<NanogptModelsResult>
+    /** Re-fetch both catalogues from NanoGPT and rewrite the cache. */
+    refresh(): Promise<NanogptRefreshResult>
+    usage(): Promise<NanoUsage>
+    /** Generate images. Throws when the model is known to bill balance and consent was not given. */
+    generate(a: NanogptGenerateArgs): Promise<NanogptGenerateResult>
+    images: {
+      /** Metadata only — call `read` for the bytes. Omit sessionID for the whole gallery. */
+      list(sessionID?: string): Promise<GeneratedImageMeta[]>
+      /** Base64 PNG bytes, or null when the file is gone. */
+      read(id: string): Promise<string | null>
+      remove(id: string): Promise<void>
+    }
+  }
   messages(directory: string, sessionID: string): Promise<MessageWithParts[]>
   revertMessage(a: RevertArgs): Promise<void>
   searchChats(directory: string, query: string): Promise<ChatSearchHit[]>
@@ -187,7 +395,33 @@ export interface OpencodeApi {
   openExternal(url: string): Promise<void>
   pathForFile(file: File): string
   exportChat(defaultName: string, content: string): Promise<boolean>
-  saveFile(a: { defaultName: string; content: string }): Promise<boolean>
+  /** `encoding` defaults to 'utf8'; pass 'base64' to write bytes (e.g. a generated PNG). */
+  saveFile(a: { defaultName: string; content: string; encoding?: 'utf8' | 'base64' }): Promise<boolean>
+  fs: {
+    tree(directory: string, path?: string, depth?: number): Promise<FileNode[]>
+    read(directory: string, path: string): Promise<FileContent>
+    write(a: { directory: string; path: string; text: string; baseSha: string }): Promise<{ sha: string }>
+  }
+  git: {
+    status(directory: string): Promise<GitStatus | null>
+    diff(a: { directory: string; path: string; staged?: boolean }): Promise<FileDiff>
+    stage(directory: string, paths: string[]): Promise<GitStatus | null>
+    unstage(directory: string, paths: string[]): Promise<GitStatus | null>
+    stageHunks(a: { directory: string; path: string; patch: string }): Promise<GitStatus | null>
+    commit(a: { directory: string; message: string; amend?: boolean }): Promise<{ sha: string }>
+    branches(directory: string): Promise<GitBranch[]>
+    checkout(a: { directory: string; branch: string; create?: boolean }): Promise<GitStatus | null>
+    remoteUrl(directory: string): Promise<string | null>
+  }
+  term: {
+    start(a: { directory: string; cols: number; rows: number }): Promise<{ id: TermId }>
+    write(id: TermId, data: string): Promise<void>
+    resize(id: TermId, cols: number, rows: number): Promise<void>
+    kill(id: TermId): Promise<void>
+    onData(cb: (e: { id: TermId; data: string }) => void): () => void
+    onExit(cb: (e: { id: TermId; code: number }) => void): () => void
+  }
+  openEditor(a: { directory: string; path: string; line?: number; column?: number }): Promise<void>
   onEvent(cb: (e: OcEvent) => void): () => void
   onServer(cb: (s: ServerStatus) => void): () => void
   onMainMenuNewSession(cb: () => void): () => void
@@ -199,7 +433,14 @@ export interface OpencodeApi {
 export type { Permission }
 
 function subscribe<T>(
-  channel: 'oc:event' | 'oc:server' | 'quick-entry:prompt' | 'update:status',
+  channel:
+    | 'oc:event'
+    | 'oc:server'
+    | 'quick-entry:prompt'
+    | 'update:status'
+    | 'oc:live:message'
+    | 'oc:term:data'
+    | 'oc:term:exit',
   callback: (payload: T) => void
 ): () => void {
   const listener = (_event: IpcRendererEvent, payload: T): void => {
@@ -264,6 +505,23 @@ const api: OpencodeApi = {
     remove: (providerID) => ipcRenderer.invoke('oc:keys:delete', providerID),
     test: (providerID) => ipcRenderer.invoke('oc:keys:test', providerID)
   },
+  live: {
+    start: () => ipcRenderer.invoke('oc:live:start'),
+    send: (input) => ipcRenderer.send('oc:live:send', input),
+    stop: () => ipcRenderer.invoke('oc:live:stop'),
+    onMessage: (cb) => subscribe<GeminiLiveEvent>('oc:live:message', cb)
+  },
+  nanogpt: {
+    models: () => ipcRenderer.invoke('oc:nanogpt:models'),
+    refresh: () => ipcRenderer.invoke('oc:nanogpt:refresh'),
+    usage: () => ipcRenderer.invoke('oc:nanogpt:usage'),
+    generate: (a) => ipcRenderer.invoke('oc:nanogpt:generate', a),
+    images: {
+      list: (sessionID) => ipcRenderer.invoke('oc:nanogpt:images:list', sessionID),
+      read: (id) => ipcRenderer.invoke('oc:nanogpt:images:read', id),
+      remove: (id) => ipcRenderer.invoke('oc:nanogpt:images:delete', id)
+    }
+  },
   messages: (directory, sessionID) => ipcRenderer.invoke('oc:messages:list', directory, sessionID),
   revertMessage: (a) => ipcRenderer.invoke('oc:messages:revert', a),
   searchChats: (directory, query) => ipcRenderer.invoke('oc:search:chats', directory, query),
@@ -275,6 +533,31 @@ const api: OpencodeApi = {
   pathForFile: (file) => webUtils.getPathForFile(file),
   exportChat: (defaultName, content) => ipcRenderer.invoke('oc:exportChat', defaultName, content),
   saveFile: (a) => ipcRenderer.invoke('oc:saveFile', a),
+  fs: {
+    tree: (directory, path, depth) => ipcRenderer.invoke('oc:fs:tree', { directory, path, depth }),
+    read: (directory, path) => ipcRenderer.invoke('oc:fs:read', { directory, path }),
+    write: (a) => ipcRenderer.invoke('oc:fs:write', a)
+  },
+  git: {
+    status: (directory) => ipcRenderer.invoke('oc:git:status', directory),
+    diff: (a) => ipcRenderer.invoke('oc:git:diff', a),
+    stage: (directory, paths) => ipcRenderer.invoke('oc:git:stage', { directory, paths }),
+    unstage: (directory, paths) => ipcRenderer.invoke('oc:git:unstage', { directory, paths }),
+    stageHunks: (a) => ipcRenderer.invoke('oc:git:stageHunks', a),
+    commit: (a) => ipcRenderer.invoke('oc:git:commit', a),
+    branches: (directory) => ipcRenderer.invoke('oc:git:branches', directory),
+    checkout: (a) => ipcRenderer.invoke('oc:git:checkout', a),
+    remoteUrl: (directory) => ipcRenderer.invoke('oc:git:remoteUrl', directory)
+  },
+  term: {
+    start: (a) => ipcRenderer.invoke('oc:term:start', a),
+    write: (id, data) => ipcRenderer.invoke('oc:term:write', { id, data }),
+    resize: (id, cols, rows) => ipcRenderer.invoke('oc:term:resize', { id, cols, rows }),
+    kill: (id) => ipcRenderer.invoke('oc:term:kill', id),
+    onData: (cb) => subscribe<{ id: TermId; data: string }>('oc:term:data', cb),
+    onExit: (cb) => subscribe<{ id: TermId; code: number }>('oc:term:exit', cb)
+  },
+  openEditor: (a) => ipcRenderer.invoke('oc:openEditor', a),
   onEvent: (cb) => subscribe<OcEvent>('oc:event', cb),
   onServer: (cb) => subscribe<ServerStatus>('oc:server', cb),
   onMainMenuNewSession: (cb) => {

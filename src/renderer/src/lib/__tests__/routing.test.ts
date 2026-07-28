@@ -5,6 +5,8 @@ import {
   recordSuccess,
   recordFailure,
   underRateCaps,
+  underModelRateCaps,
+  releaseAttempt,
   selectModel,
   parseModelKey,
   codingQuality,
@@ -254,6 +256,18 @@ describe('Smart routing v2 (routing.ts)', () => {
       expect(picked).toBeNull()
     })
 
+    it('can fail over away from an explicitly excluded failed model', () => {
+      const candidates = new Set<ModelKey>([modelB, modelC])
+      candidates.delete(modelB)
+      const picked = selectModel(null, {}, caps, now, {
+        sticky: false,
+        current: modelB,
+        available: candidates,
+        authenticatedProviders: new Set(['groq', 'cerebras'])
+      })
+      expect(picked).toBe(modelC)
+    })
+
     it('ranks strong coding models deterministically when no pool is set', () => {
       const models = new Set<ModelKey>([
         'google/gemini-2.5-pro',
@@ -340,6 +354,95 @@ describe('Smart routing v2 (routing.ts)', () => {
       expect(mockStorage[LEDGER_STORAGE_KEY]).toBeDefined()
       expect(JSON.parse(mockStorage[LEDGER_STORAGE_KEY])[modelA].success).toBe(1)
       vi.useRealTimers()
+    })
+  })
+
+  describe('record429 with retryAfterMs', () => {
+    it('uses retryAfterMs when provided instead of exponential backoff', () => {
+      const ledger: Ledger = {}
+      const updated = record429(ledger, modelA, now, 45000)
+      expect(updated[modelA].cooldownMs).toBe(45000)
+      expect(updated[modelA].cooldownUntil).toBe(now + 45000)
+    })
+
+    it('caps retryAfterMs at 120s for rpm-style waits', () => {
+      const ledger: Ledger = {}
+      const updated = record429(ledger, modelA, now, 300000)
+      expect(updated[modelA].cooldownMs).toBe(120000)
+      expect(updated[modelA].cooldownUntil).toBe(now + 120000)
+    })
+
+    it('falls back to exponential backoff when retryAfterMs is undefined', () => {
+      let ledger: Ledger = {}
+      ledger = record429(ledger, modelA, now)
+      expect(ledger[modelA].cooldownMs).toBe(30000)
+      ledger = record429(ledger, modelA, now + 10000)
+      expect(ledger[modelA].cooldownMs).toBe(60000)
+    })
+  })
+
+  describe('releaseAttempt', () => {
+    it('removes the most recent send timestamp for a model', () => {
+      let ledger: Ledger = {}
+      ledger = reserveAttempt(ledger, modelA, now)
+      ledger = reserveAttempt(ledger, modelA, now + 1000)
+      expect(ledger[modelA].sends).toHaveLength(2)
+
+      ledger = releaseAttempt(ledger, modelA)
+      expect(ledger[modelA].sends).toHaveLength(1)
+      expect(ledger[modelA].sends[0]).toBe(now)
+    })
+
+    it('is a no-op when model has no sends', () => {
+      const ledger: Ledger = {}
+      const result = releaseAttempt(ledger, modelA)
+      expect(result).toEqual({})
+    })
+  })
+
+  describe('underModelRateCaps (model-level, not provider-level)', () => {
+    it('counts only sends for the specific model, not the whole provider', () => {
+      const caps: ModelCapsMap = { google: { rpm: 2 } }
+      const ledger: Ledger = {
+        [modelA]: { cooldownUntil: 0, cooldownMs: 30000, success: 0, error: 0, last429: null, latencyEwma: null, sends: [now - 10000] },
+        'google/gemini-2.5-pro': { cooldownUntil: 0, cooldownMs: 30000, success: 0, error: 0, last429: null, latencyEwma: null, sends: [now - 5000] }
+      }
+      // underRateCaps (provider-level) would see 2 sends for google and return false
+      expect(underRateCaps(ledger, modelA, caps, now)).toBe(false)
+      // underModelRateCaps (model-level) sees only 1 send for modelA and returns true
+      expect(underModelRateCaps(ledger, modelA, caps, now)).toBe(true)
+    })
+  })
+
+  describe('codingQuality with freeCodingQuality integration', () => {
+    it('returns tier-based score for known free models', () => {
+      expect(codingQuality('google/gemini-3.6-flash')).toBe(5) // S-tier
+      expect(codingQuality('groq/openai/gpt-oss-120b')).toBe(4) // A-tier
+      expect(codingQuality('groq/llama-3.3-70b-versatile')).toBe(3) // B-tier
+      expect(codingQuality('groq/llama-3.1-8b-instant')).toBe(2) // C-tier
+    })
+
+    it('falls back to regex scoring for unknown models', () => {
+      expect(codingQuality('openai/gpt-5.5-codex')).toBe(6)
+      expect(codingQuality('anthropic/claude-sonnet-4')).toBe(4)
+    })
+  })
+
+  describe('selectModel with success-ratio floor (R11)', () => {
+    it('skips models with >= 5 attempts and < 20% success ratio', () => {
+      const caps: ModelCapsMap = {}
+      const available = new Set([modelA, modelB])
+      const ledger: Ledger = {
+        [modelA]: { cooldownUntil: 0, cooldownMs: 30000, success: 0, error: 6, last429: null, latencyEwma: null, sends: [] },
+        [modelB]: { cooldownUntil: 0, cooldownMs: 30000, success: 3, error: 1, last429: null, latencyEwma: null, sends: [] }
+      }
+      const picked = selectModel(null, ledger, caps, now, {
+        sticky: false,
+        current: null,
+        available,
+        authenticatedProviders: new Set(['google', 'groq'])
+      })
+      expect(picked).toBe(modelB)
     })
   })
 })

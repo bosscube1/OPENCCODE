@@ -4,6 +4,20 @@ import { useStore } from '../lib/store'
 import { sessionCost, contextUsed, contextLimit } from '../lib/aggregate'
 import { formatCost, formatTokens } from '../lib/format'
 import { SettingsPanel } from './SettingsPanel'
+import type { AppState } from '../lib/slices/types'
+
+/** Entry points into the right-hand code surface. Always visible — the panel's own
+ *  tab strip is unreachable while the panel is collapsed. */
+const PANEL_BUTTONS: ReadonlyArray<{
+  tab: NonNullable<AppState['panelTab']>
+  label: string
+  hint: string
+}> = [
+  { tab: 'files', label: 'Files', hint: 'File tree (Ctrl+B)' },
+  { tab: 'editor', label: 'Editor', hint: 'Review and edit files' },
+  { tab: 'git', label: 'Git', hint: 'Stage and commit changes' },
+  { tab: 'terminal', label: 'Terminal', hint: 'Integrated terminal (Ctrl+`)' }
+]
 
 function hostLabel(url: string | null): string {
   if (!url) return 'no url'
@@ -21,6 +35,9 @@ export function StatusBar(): JSX.Element {
   const providers = useStore((s) => s.providers)
   const providerID = useStore((s) => s.providerID)
   const modelID = useStore((s) => s.modelID)
+  const pinnedProviderID = useStore((s) => s.pinnedProviderID)
+  const pinnedModelID = useStore((s) => s.pinnedModelID)
+  const revertToPinned = useStore((s) => s.revertToPinned)
   const sessions = useStore((s) => s.sessions)
   const activeSessionID = useStore((s) => s.activeSessionID)
   const busy = useStore((s) => s.busy)
@@ -30,6 +47,8 @@ export function StatusBar(): JSX.Element {
   const setTheme = useStore((s) => s.setTheme)
   const branch = useStore((s) => s.branch)
   const messages = useStore((s) => s.messages)
+  const panelTab = useStore((s) => s.panelTab)
+  const setPanelTab = useStore((s) => s.setPanelTab)
 
   useEffect(() => {
     const onToggleSettings = () => setShowSettings((prev) => !prev)
@@ -71,6 +90,32 @@ export function StatusBar(): JSX.Element {
 
   return (
     <footer className="app__status">
+      {/*
+        The code-surface panel starts collapsed, and its tab strip lives inside the
+        panel — so without these buttons there is no way to discover or reach it
+        except undocumented keyboard shortcuts.
+      */}
+      <span className="app__status-panels" role="group" aria-label="Code surface">
+        {PANEL_BUTTONS.map(({ tab, label, hint }) => (
+          <button
+            key={tab}
+            type="button"
+            className={
+              panelTab === tab
+                ? 'app__status-panelbtn app__status-panelbtn--active'
+                : 'app__status-panelbtn'
+            }
+            aria-pressed={panelTab === tab}
+            title={hint}
+            onClick={() => setPanelTab(panelTab === tab ? null : tab)}
+          >
+            {label}
+          </button>
+        ))}
+      </span>
+
+      <span className="app__status-sep" aria-hidden="true" />
+
       <span
         className="app__status-item"
         title={server.error ? server.error : (server.url ?? 'OpenCode server not running')}
@@ -95,6 +140,26 @@ export function StatusBar(): JSX.Element {
         <span className="app__status-item app__autorotate" title="Free Model Auto-Routing enabled (cycles models on 429 rate limit)">
           ⚡ Auto-Route
         </span>
+      )}
+
+      {pinnedProviderID && pinnedModelID && (pinnedProviderID !== providerID || pinnedModelID !== modelID) && (
+        <button
+          type="button"
+          className="app__status-item"
+          style={{
+            background: 'var(--warn, #b45309)',
+            color: 'white',
+            border: 'none',
+            padding: '2px 8px',
+            borderRadius: '4px',
+            fontSize: '11px',
+            cursor: 'pointer',
+          }}
+          title={`Failed over from ${pinnedProviderID}/${pinnedModelID}. Click to revert.`}
+          onClick={() => revertToPinned()}
+        >
+          ⚡ {pinnedModelID} → {modelID} ↺
+        </button>
       )}
 
       {branch && (

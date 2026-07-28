@@ -4,6 +4,7 @@ import type { UpdateStatus } from '../lib/types'
 import { useStore } from '../lib/store'
 import { FREE_ROUTING_CANDIDATES } from '../lib/rotation'
 import { McpPanel } from './McpPanel'
+import { RoutingPanel } from './RoutingPanel'
 
 /** Listened for by ProviderPanel (mounted separately, in Sidebar) to open itself. */
 const OPEN_PROVIDERS_EVENT = 'providers:open'
@@ -30,10 +31,10 @@ function updateStatusText(status: UpdateStatus): string {
 export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () => void }): JSX.Element | null {
   const theme = useStore((s) => s.theme)
   const setTheme = useStore((s) => s.setTheme)
-  const autoRotate = useStore((s) => s.autoRotate)
-  const toggleAutoRotate = useStore((s) => s.toggleAutoRotate)
-  const stickyModel = useStore((s) => s.stickyModel)
-  const toggleStickyModel = useStore((s) => s.toggleStickyModel)
+  const routingMode = useStore((s) => s.routingMode)
+  const setRoutingMode = useStore((s) => s.setRoutingMode)
+  const showPaidModels = useStore((s) => s.showPaidModels)
+  const setShowPaidModels = useStore((s) => s.setShowPaidModels)
   const modelPool = useStore((s) => s.modelPool)
   const setModelPool = useStore((s) => s.setModelPool)
   const providers = useStore((s) => s.providers)
@@ -121,6 +122,29 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
           </section>
 
           <section>
+            <h2 className="providers__group-title">NanoGPT Images</h2>
+            <div className="providers__card">
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={appSettings.nanogptSubscriptionOnly}
+                  onChange={(event) => {
+                    void updateAppSettings({ nanogptSubscriptionOnly: event.target.checked })
+                  }}
+                />
+                Subscription images only
+              </label>
+              <p style={{ fontSize: '11.5px', color: 'var(--fg-dim)', margin: '6px 0 0' }}>
+                NanoGPT does not publish which image models its subscription covers, so a model&apos;s
+                billing is only known once it has generated: the response reports a
+                {' '}<code>paymentSource</code>. With this on, any model found to bill your
+                pay-as-you-go balance is refused from then on. The first generation on an
+                untested model is what reveals it.
+              </p>
+            </div>
+          </section>
+
+          <section>
             <h2 className="providers__group-title">Desktop Integration</h2>
             <div className="providers__card">
               <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer' }}>
@@ -198,28 +222,88 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
             <h2 className="providers__group-title">Model Preferences & Smart Routing</h2>
             <div className="providers__card">
               <div className="providers__row">
-                <span className="providers__name">Free Auto-Routing</span>
+                <span className="providers__name">Routing Mode</span>
               </div>
               <p style={{ fontSize: '11.5px', color: 'var(--fg-dim)', marginTop: '4px', marginBottom: '8px' }}>
-                Proactively selects healthy models and automatically falls back on rate limit errors.
+                How OpenCode Desktop chooses which model runs each turn.
               </p>
+              <div role="radiogroup" aria-label="Routing mode" style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
+                {(['locked', 'failover', 'auto'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    role="radio"
+                    aria-checked={routingMode === mode}
+                    onClick={() => setRoutingMode(mode)}
+                    style={{
+                      flex: 1,
+                      padding: '6px 10px',
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                      background: routingMode === mode ? 'var(--accent)' : 'transparent',
+                      color: routingMode === mode ? 'var(--bg)' : 'var(--fg)',
+                      border: '1px solid var(--border)',
+                      borderRadius: '4px',
+                      fontWeight: routingMode === mode ? 600 : 400,
+                    }}
+                    title={
+                      mode === 'locked' ? 'Never change model. Surface errors only.'
+                      : mode === 'failover' ? 'Use your model. Swap only on 429/timeout. (Recommended)'
+                      : 'Proactively pick best healthy model each send. (Legacy)'
+                    }
+                  >
+                    {mode === 'locked' ? '🔒 Locked' : mode === 'failover' ? '⚡ Failover' : '🎯 Auto'}
+                  </button>
+                ))}
+              </div>
+              <p style={{ fontSize: '11px', color: 'var(--fg-dim)', marginBottom: '12px' }}>
+                {routingMode === 'locked' && 'Your chosen model runs every turn. Errors surface immediately.'}
+                {routingMode === 'failover' && 'Your chosen model stays pinned. On 429 or stall, auto-fails over to a healthy free model — your chosen pin is never overwritten.'}
+                {routingMode === 'auto' && 'Legacy: pre-selects the healthiest model on every send. May override your pick for this session.'}
+              </p>
+
               <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', cursor: 'pointer', marginBottom: '10px' }}>
                 <input
                   type="checkbox"
-                  checked={autoRotate}
-                  onChange={toggleAutoRotate}
+                  checked={showPaidModels}
+                  onChange={(e) => setShowPaidModels(e.target.checked)}
                 />
-                Enable Auto-Rotate (Smart Router v2)
+                Show paid models in picker
               </label>
+              <p style={{ fontSize: '11px', color: 'var(--fg-dim)', marginTop: '-6px', marginBottom: '12px' }}>
+                Paid models still require manual selection — auto-failover never routes to a paid model.
+              </p>
 
-              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', cursor: 'pointer', marginBottom: '12px' }}>
-                <input
-                  type="checkbox"
-                  checked={stickyModel}
-                  onChange={toggleStickyModel}
-                />
-                Sticky Model (stay on current model if healthy)
-              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '12px' }}>
+                  <span>TTFT (ms) — time to first token</span>
+                  <input
+                    type="number"
+                    min={5000}
+                    step={1000}
+                    value={appSettings.ttftMs}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10)
+                      if (Number.isFinite(v) && v >= 5000) void updateAppSettings({ ttftMs: v })
+                    }}
+                    style={{ padding: '4px 6px', fontSize: '12px' }}
+                  />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '12px' }}>
+                  <span>Stall (ms) — max gap between parts</span>
+                  <input
+                    type="number"
+                    min={10000}
+                    step={5000}
+                    value={appSettings.stallMs}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10)
+                      if (Number.isFinite(v) && v >= 10000) void updateAppSettings({ stallMs: v })
+                    }}
+                    style={{ padding: '4px 6px', fontSize: '12px' }}
+                  />
+                </label>
+              </div>
 
               <div style={{ borderTop: '1px solid var(--border)', paddingTop: '10px', marginTop: '10px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
@@ -259,6 +343,13 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
                   })}
                 </div>
               </div>
+            </div>
+          </section>
+
+          <section>
+            <h2 className="providers__group-title">Live Model Health</h2>
+            <div className="providers__card">
+              <RoutingPanel />
             </div>
           </section>
 

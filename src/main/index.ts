@@ -1,7 +1,7 @@
 /**
  * Electron app lifecycle: window creation, OpenCode server supervision, event fan-out.
  */
-import { app, BrowserWindow, dialog, screen } from 'electron'
+import { app, BrowserWindow, desktopCapturer, dialog, screen, session } from 'electron'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -212,7 +212,7 @@ function createWindow(): BrowserWindow {
     show: false,
     backgroundColor: '#1f1e1d',
     autoHideMenuBar: true,
-    title: 'opencode desktop',
+    title: rendererDevUrl ? 'OpenCode Desktop (Dev)' : 'OpenCode Desktop',
     webPreferences: {
       preload: resolvePreload(),
       contextIsolation: true,
@@ -332,8 +332,10 @@ function requestQuit(): void {
 /* bootstrap                                                           */
 /* ------------------------------------------------------------------ */
 
-// A second instance would spawn a second server; keep exactly one.
-if (!app.requestSingleInstanceLock()) {
+// Production keeps exactly one instance. Development may opt out so a local build can
+// be tested while the installed tray app is still running.
+const allowDevelopmentInstance = !app.isPackaged && process.env.OPENCODE_DESKTOP_ALLOW_MULTIPLE === '1'
+if (!allowDevelopmentInstance && !app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   app.on('second-instance', () => {
@@ -366,7 +368,14 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(() => {
     initCrashLog(app)
-    app.setAppUserModelId('dev.opencode.desktop')
+    app.setAppUserModelId(rendererDevUrl ? 'dev.opencode.desktop.dev' : 'dev.opencode.desktop')
+
+    // Prefer Windows' native share picker. The fallback keeps screen sharing usable on
+    // systems where Chromium does not expose that picker to Electron.
+    session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
+      const sources = await desktopCapturer.getSources({ types: ['screen', 'window'] })
+      callback({ video: sources[0] })
+    }, { useSystemPicker: true })
 
     quickEntry = setupQuickEntry({
       preloadPath: resolvePreload(),

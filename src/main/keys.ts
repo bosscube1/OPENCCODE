@@ -23,6 +23,7 @@ import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { ALLOWLIST, ALIASES } from './env'
 import { catalogByProvider, PROVIDER_CATALOG } from './providerCatalog'
+import { GoogleGenAI, Modality } from '@google/genai'
 
 /* ------------------------------------------------------------------ */
 /* storage shape                                                       */
@@ -266,6 +267,28 @@ export function loadByokEnv(): Record<string, string> {
     // Never block startup on BYOK failures.
   }
   return vars
+}
+
+/** Mint a one-use, short-lived Live API token without exposing the stored Google key. */
+export async function createGeminiLiveToken(): Promise<string> {
+  const env = loadByokEnv()
+  const apiKey = env.GEMINI_API_KEY ?? process.env.GEMINI_API_KEY ?? process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? process.env.GOOGLE_API_KEY
+  if (!apiKey) throw new Error('No Google API key is configured. Add Google under Providers first.')
+  const client = new GoogleGenAI({ apiKey, httpOptions: { apiVersion: 'v1alpha' } })
+  const now = Date.now()
+  const token = await client.authTokens.create({
+    config: {
+      uses: 1,
+      newSessionExpireTime: new Date(now + 60_000).toISOString(),
+      expireTime: new Date(now + 30 * 60_000).toISOString(),
+      liveConnectConstraints: {
+        model: 'gemini-3.1-flash-live-preview',
+        config: { responseModalities: [Modality.AUDIO] }
+      }
+    }
+  })
+  if (!token.name) throw new Error('Gemini did not return a Live session token.')
+  return token.name
 }
 
 /**

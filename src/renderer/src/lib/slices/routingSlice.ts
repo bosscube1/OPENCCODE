@@ -1,0 +1,154 @@
+/**
+ * Providers, model selection, and the chosen/effective split.
+ *
+ * The routing LEDGER and the failover machinery itself live in `attemptMachine.ts` — they are
+ * singletons shared with `send()` and the SSE reducer, and duplicating them here would let a
+ * proactive pick race a reactive retry against a stale snapshot. This slice only reads the
+ * ledger through the accessor when picking a model.
+ */
+
+import { isAgentModel } from '../models'
+import { savePrefs, type RoutingMode } from '../prefs'
+import { isFreeModel } from '../freeTier'
+import { selectModel, DEFAULT_PROVIDER_CAPS, parseModelKey } from '../routing'
+import { getLedger } from './attemptMachine'
+import type { AppState, SetState, GetState } from './types'
+
+export type RoutingSlice = Pick<
+  AppState,
+  | 'providers'
+  | 'defaultModels'
+  | 'linkedProviderIDs'
+  | 'providerID'
+  | 'modelID'
+  | 'pinnedProviderID'
+  | 'pinnedModelID'
+  | 'autoRotate'
+  | 'modelPool'
+  | 'stickyModel'
+  | 'routingMode'
+  | 'showPaidModels'
+  | 'setModel'
+  | 'revertToPinned'
+  | 'toggleAutoRotate'
+  | 'toggleStickyModel'
+  | 'setRoutingMode'
+  | 'setShowPaidModels'
+  | 'setModelPool'
+  | 'rotateToNextFreeModel'
+>
+
+export function createRoutingSlice(set: SetState, get: GetState): RoutingSlice {
+  return {
+    providers: [],
+    defaultModels: {},
+    linkedProviderIDs: [],
+    providerID: null,
+    modelID: null,
+    pinnedProviderID: null,
+    pinnedModelID: null,
+    autoRotate: false,
+    modelPool: null,
+    stickyModel: false,
+    routingMode: 'failover' as RoutingMode,
+    showPaidModels: false,
+
+    toggleAutoRotate(): void {
+      const next = !get().autoRotate
+      set({ autoRotate: next })
+      const { directory, providerID, modelID, theme, modelPool, stickyModel } = get()
+      savePrefs({ directory, providerID, modelID, autoRotate: next, theme, modelPool, stickyModel })
+    },
+
+    toggleStickyModel(): void {
+      const next = !get().stickyModel
+      set({ stickyModel: next })
+      const { directory, providerID, modelID, autoRotate, theme, modelPool, routingMode, showPaidModels } = get()
+      savePrefs({ directory, providerID, modelID, autoRotate, theme, modelPool, stickyModel: next, routingMode, showPaidModels })
+    },
+
+    setRoutingMode(mode: RoutingMode): void {
+      // Keep legacy booleans in sync for read-only consumers during transition
+      const autoRotate = mode === 'auto'
+      const stickyModel = mode === 'failover'
+      set({ routingMode: mode, autoRotate, stickyModel })
+      const { directory, providerID, modelID, theme, modelPool, showPaidModels } = get()
+      savePrefs({ directory, providerID, modelID, autoRotate, theme, modelPool, stickyModel, routingMode: mode, showPaidModels })
+    },
+
+    setShowPaidModels(v: boolean): void {
+      set({ showPaidModels: v })
+      const { directory, providerID, modelID, autoRotate, theme, modelPool, stickyModel, routingMode } = get()
+      savePrefs({ directory, providerID, modelID, autoRotate, theme, modelPool, stickyModel, routingMode, showPaidModels: v })
+    },
+
+    setModelPool(pool: string[] | null): void {
+      set({ modelPool: pool })
+      const { directory, providerID, modelID, autoRotate, theme, stickyModel } = get()
+      savePrefs({ directory, providerID, modelID, autoRotate, theme, modelPool: pool, stickyModel })
+    },
+
+    rotateToNextFreeModel(exclude?: string, excludeProviderID?: string): { providerID: string; modelID: string; providerName: string; modelName: string } | null {
+      const { providers, linkedProviderIDs, providerID: currentP, modelID: currentM, modelPool } = get()
+      if (providers.length === 0) return null
+
+      // Free-only pool for auto-failover (never routes to paid, even if showPaidModels is on)
+      const available = new Set<string>()
+      for (const p of providers) {
+        if (!linkedProviderIDs.includes(p.id)) continue
+        for (const m of Object.values(p.models ?? {}) as Array<{ id: string }>) {
+          if (isAgentModel(m as any) && isFreeModel(p.id, m.id)) available.add(`${p.id}/${m.id}`)
+        }
+      }
+      // A failed model must never be immediately selected again.  Transient
+      // errors do not impose a long provider cooldown, so relying on the ledger
+      // alone can otherwise make failover retry the same high-ranked model.
+      if (exclude) available.delete(exclude)
+      if (excludeProviderID) {
+        for (const key of available) {
+          if (parseModelKey(key)?.providerID === excludeProviderID) available.delete(key)
+        }
+      }
+
+      const chosenKey = selectModel(modelPool, getLedger(), DEFAULT_PROVIDER_CAPS, Date.now(), {
+        sticky: false,
+        current: currentP && currentM ? `${currentP}/${currentM}` : null,
+        available,
+        authenticatedProviders: new Set(linkedProviderIDs)
+      })
+
+      if (chosenKey && chosenKey !== `${currentP}/${currentM}`) {
+        const parsed = parseModelKey(chosenKey)
+        if (!parsed) return null
+        const { providerID: nextP, modelID: nextM } = parsed
+        const provider = providers.find((p) => p.id === nextP)
+        const model = provider?.models?.[nextM]
+        if (provider && model) {
+          // R4: effective-only rotation — do NOT savePrefs; chosen pin stays intact
+          set({ providerID: nextP, modelID: nextM })
+          return {
+            providerID: nextP,
+            modelID: nextM,
+            providerName: provider.name,
+            modelName: model.name ?? nextM
+          }
+        }
+      }
+
+      return null
+    },
+
+    setModel(providerID: string, modelID: string): void {
+      // Setting a model updates BOTH pinned (user intent) and effective (current run)
+      set({ providerID, modelID, pinnedProviderID: providerID, pinnedModelID: modelID })
+      const { directory, autoRotate, theme, modelPool, stickyModel, routingMode, showPaidModels } = get()
+      savePrefs({ directory, providerID, modelID, autoRotate, theme, modelPool, stickyModel, routingMode, showPaidModels })
+    },
+
+    revertToPinned(): void {
+      const { pinnedProviderID, pinnedModelID } = get()
+      if (!pinnedProviderID || !pinnedModelID) return
+      set({ providerID: pinnedProviderID, modelID: pinnedModelID })
+    }
+  }
+}

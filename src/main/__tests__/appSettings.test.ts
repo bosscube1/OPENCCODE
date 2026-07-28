@@ -44,13 +44,13 @@ describe('app settings', () => {
     const controller = createAppSettingsController({ userDataPath, shortcut, onShortcut })
 
     expect(controller.get()).toEqual({
-      settings: { closeToTray: true, globalShortcut: 'Ctrl+Alt+Space' },
+      settings: { closeToTray: true, globalShortcut: 'Ctrl+Alt+Space', showPaidModels: false, ttftMs: 20000, stallMs: 90000, nanogptSubscriptionOnly: true },
       shortcutRegistered: true
     })
     expect(shortcut.register).toHaveBeenCalledWith('Ctrl+Alt+Space', onShortcut)
     expect(JSON.parse(readFileSync(join(userDataPath, 'app-settings.json'), 'utf8'))).toEqual({
       version: APP_SETTINGS_VERSION,
-      settings: { closeToTray: true, globalShortcut: 'Ctrl+Alt+Space' }
+      settings: { closeToTray: true, globalShortcut: 'Ctrl+Alt+Space', showPaidModels: false, ttftMs: 20000, stallMs: 90000, nanogptSubscriptionOnly: true }
     })
   })
 
@@ -64,7 +64,11 @@ describe('app settings', () => {
 
     expect(first.set({ closeToTray: false, globalShortcut: ' Ctrl+Shift+K ' }).settings).toEqual({
       closeToTray: false,
-      globalShortcut: 'Ctrl+Shift+K'
+      globalShortcut: 'Ctrl+Shift+K',
+      showPaidModels: false,
+      ttftMs: 20000,
+      stallMs: 90000,
+      nanogptSubscriptionOnly: true
     })
     expect(firstShortcut.unregister).toHaveBeenCalledWith('Ctrl+Alt+Space')
     first.dispose()
@@ -77,7 +81,11 @@ describe('app settings', () => {
     })
     expect(second.get().settings).toEqual({
       closeToTray: false,
-      globalShortcut: 'Ctrl+Shift+K'
+      globalShortcut: 'Ctrl+Shift+K',
+      showPaidModels: false,
+      ttftMs: 20000,
+      stallMs: 90000,
+      nanogptSubscriptionOnly: true
     })
     expect(secondShortcut.register).toHaveBeenCalledWith('Ctrl+Shift+K', expect.any(Function))
   })
@@ -128,7 +136,11 @@ describe('app settings', () => {
 
     expect(controller.get().settings).toEqual({
       closeToTray: true,
-      globalShortcut: 'Ctrl+Alt+Space'
+      globalShortcut: 'Ctrl+Alt+Space',
+      showPaidModels: false,
+      ttftMs: 20000,
+      stallMs: 90000,
+      nanogptSubscriptionOnly: true
     })
     expect(JSON.parse(readFileSync(path, 'utf8')).version).toBe(APP_SETTINGS_VERSION)
   })

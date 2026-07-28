@@ -122,3 +122,61 @@ export function makeNotice(sessionID: string, text: string): MessageWithParts {
     ]
   }
 }
+
+/** One generated image to render inline: `dataUrl` is a `data:image/png;base64,…` URI. */
+export type NoticeImage = { id: string; dataUrl: string; filename: string }
+
+/**
+ * Build a synthetic assistant message carrying a caption plus one or more image file parts.
+ *
+ * MessageView already renders a `file` part whose mime starts with `image/` as a clickable
+ * thumbnail backed by ImageLightbox, and the renderer CSP allows `data:` URIs — so generated
+ * images need no bespoke rendering path, only the right part shape.
+ *
+ * `createdAt` (epoch ms) is accepted so rehydrated images sort back into their original position
+ * in the transcript instead of all landing at "now".
+ */
+export function makeImageNotice(
+  sessionID: string,
+  caption: string,
+  images: readonly NoticeImage[],
+  createdAt: number = Date.now()
+): MessageWithParts {
+  const msgId = `img-${createdAt}-${images[0]?.id ?? Math.random().toString(36).slice(2, 6)}`
+  const parts: MessageWithParts['parts'] = [
+    {
+      id: `part-${msgId}`,
+      messageID: msgId,
+      sessionID,
+      type: 'text' as const,
+      text: caption,
+    } as MessageWithParts['parts'][number]
+  ]
+  for (const image of images) {
+    parts.push({
+      id: `part-${msgId}-${image.id}`,
+      messageID: msgId,
+      sessionID,
+      type: 'file' as const,
+      mime: 'image/png',
+      filename: image.filename,
+      url: image.dataUrl,
+    } as MessageWithParts['parts'][number])
+  }
+
+  return {
+    info: {
+      id: msgId,
+      sessionID,
+      role: 'assistant' as const,
+      time: { created: Math.floor(createdAt / 1000) },
+      parentID: '',
+      modelID: 'image',
+      providerID: 'nanogpt',
+      mode: 'notice',
+      cost: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    } as MessageWithParts['info'],
+    parts
+  }
+}

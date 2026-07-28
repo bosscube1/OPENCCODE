@@ -76,12 +76,105 @@ export type McpSnapshot = {
 export type AppSettings = {
   closeToTray: boolean
   globalShortcut: string
+  showPaidModels: boolean
+  ttftMs: number
+  stallMs: number
+  /**
+   * Refuse NanoGPT image generation on any model observed to bill the pay-as-you-go balance.
+   * Default true, so the app never silently spends money.
+   */
+  nanogptSubscriptionOnly: boolean
 }
 
 export type AppSettingsResult = {
   settings: AppSettings
   shortcutRegistered: boolean
   shortcutError?: string
+}
+
+/* ------------------------------------------------------------------ *
+ * NanoGPT — subscription catalogue + image sidecar
+ * Structurally identical to the main-process and preload copies.
+ * ------------------------------------------------------------------ */
+
+export type NanoChatModel = {
+  id: string
+  name?: string
+  description?: string
+  context_length?: number
+  max_output_tokens?: number
+  capabilities?: { vision?: boolean; tool_calling?: boolean }
+}
+
+export type NanoImageModel = {
+  id: string
+  name?: string
+  description?: string
+  pricing?: unknown
+  supported_parameters?: string[]
+  tags?: string[]
+}
+
+export type NanogptModelsResult = {
+  chat: NanoChatModel[]
+  image: NanoImageModel[]
+  /** Image model ids observed to bill balance rather than the subscription. */
+  balanceBilled: string[]
+  fetchedAt: number
+}
+
+export type NanogptRefreshResult = {
+  chatCount: number
+  imageCount: number
+  /** True when the chat model set changed — the OpenCode server must restart to see it. */
+  restartRequired: boolean
+  fetchedAt: number
+}
+
+export type NanoUsage = {
+  active: boolean
+  limits: { daily: number; monthly: number }
+  enforceDailyLimit?: boolean
+  daily: { used: number; remaining: number; percentUsed: number; resetAt: number }
+  monthly: { used: number; remaining: number; percentUsed: number; resetAt: number }
+  state: string
+  graceUntil?: string | null
+}
+
+export type GeneratedImageMeta = {
+  id: string
+  sessionID: string | null
+  prompt: string
+  model: string
+  size?: string
+  paymentSource?: string
+  cost?: number
+  createdAt: number
+  bytes: number
+}
+
+export type NanogptGenerateArgs = {
+  prompt: string
+  model: string
+  n?: number
+  size?: string
+  sessionID?: string
+  /** Explicit per-call consent to bill the pay-as-you-go balance. Never defaults to true. */
+  allowBalance?: boolean
+}
+
+/** How a completed generation was billed. `unknown` = NanoGPT omitted `paymentSource`. */
+export type ImageBilling = 'subscription' | 'balance' | 'unknown'
+
+export type NanogptGenerateResult = {
+  images: Array<{ meta: GeneratedImageMeta; base64: string }>
+  billing: ImageBilling
+  paymentSource?: string
+  cost?: number
+  remainingBalance?: number
+  route: 'subscription' | 'standard'
+  /** True when this call caused the model to be recorded as balance-billing. */
+  blacklisted: boolean
 }
 
 export type UpdateStatus =
@@ -147,3 +240,95 @@ export function isAssistant(message: Message): message is AssistantMessage {
 export function isUser(message: Message): message is UserMessage {
   return message.role === 'user'
 }
+
+/* ------------------------------------------------------------------ *
+ * Phase 1 code surface (fs / git / terminal / editor deep-links)
+ * Deliberately duplicated rather than imported from src/preload (the renderer
+ * never imports main/preload runtime modules) — kept structurally identical
+ * to src/preload/index.d.ts and CONTRACTS.md "Phase 1 — Code surface".
+ * ------------------------------------------------------------------ */
+
+export type GitFileStatus =
+  | 'untracked'
+  | 'modified'
+  | 'added'
+  | 'deleted'
+  | 'renamed'
+  | 'conflicted'
+  | 'ignored'
+
+export type FileNode = {
+  name: string
+  /** POSIX-separated, ALWAYS relative to the session directory. */
+  path: string
+  kind: 'file' | 'dir'
+  gitStatus: GitFileStatus | null
+  /** Edited by the agent during this session. */
+  touched: boolean
+}
+
+export type FileContent = {
+  path: string
+  text: string
+  bytes: number
+  /** True when the file exceeded MAX_READ_BYTES. */
+  truncated: boolean
+  /** sha256 of the on-disk bytes; the optimistic-concurrency token. */
+  sha: string
+  /** Monaco language id, inferred from extension. */
+  language: string | null
+}
+
+export type DiffLine = { kind: 'ctx' | 'add' | 'del'; text: string }
+
+export type Hunk = {
+  /** Stable within one FileDiff: `${oldStart}-${newStart}`. */
+  id: string
+  /** "@@ -a,b +c,d @@" */
+  header: string
+  oldStart: number
+  oldLines: number
+  newStart: number
+  newLines: number
+  lines: DiffLine[]
+  /**
+   * Set when that side ends without a trailing newline ("\ No newline at end of
+   * file"). Load-bearing: without it, applying a file's final hunk silently adds a
+   * newline that was never in the source.
+   */
+  oldNoEofNewline?: boolean
+  newNoEofNewline?: boolean
+}
+
+export type FileDiff = {
+  path: string
+  /** Set on renames. */
+  oldPath?: string
+  /** When true, `hunks` is empty. */
+  binary: boolean
+  /** True when the diff exceeded the 5000-line cap and hunks were dropped. */
+  truncated: boolean
+  hunks: Hunk[]
+}
+
+export type GitStatusEntry = {
+  path: string
+  /** Staged side. */
+  index: GitFileStatus | null
+  /** Unstaged side. */
+  worktree: GitFileStatus | null
+  renamedFrom?: string
+}
+
+export type GitStatus = {
+  branch: string
+  upstream: string | null
+  ahead: number
+  behind: number
+  entries: GitStatusEntry[]
+  clean: boolean
+}
+
+export type GitBranch = { name: string; current: boolean; remote: boolean }
+
+export type TermId = string

@@ -12,7 +12,11 @@ const AUTH_COMMAND = 'opencode auth login'
 /** Providers with a usable free tier, surfaced first everywhere in the UI. */
 const FREE_TIER = new Set(['groq', 'google', 'openrouter', 'cerebras', 'mistral'])
 
+/** Provider id whose models come from a flat-rate subscription catalogue fetched at runtime. */
+const NANOGPT = 'nanogpt'
+
 const DOCS: Record<string, string> = {
+  nanogpt: 'https://docs.nano-gpt.com/',
   groq: 'https://console.groq.com/docs/quickstart',
   google: 'https://ai.google.dev/gemini-api/docs',
   'google-vertex': 'https://cloud.google.com/vertex-ai/generative-ai/docs',
@@ -45,6 +49,10 @@ const FALLBACK_DOCS = 'https://opencode.ai/docs/providers/'
 
 /** Built-in floor of key-manageable providers so a key can be added before OpenCode knows the provider. */
 const BUILTIN_PROVIDERS: { id: string; name: string }[] = [
+  // NanoGPT MUST be listed here: its OpenCode provider block is generated from the cached
+  // subscription catalogue, which cannot be fetched until a key exists — so on a fresh install the
+  // provider is absent from `providers` and this floor entry is the only way to enter the key.
+  { id: NANOGPT, name: 'NanoGPT (subscription)' },
   { id: 'google', name: 'Google' },
   { id: 'groq', name: 'Groq' },
   { id: 'cerebras', name: 'Cerebras' },
@@ -65,9 +73,98 @@ const BUILTIN_PROVIDERS: { id: string; name: string }[] = [
 const OPEN_PROVIDERS_EVENT = 'providers:open'
 
 function rankID(id: string): number {
+  if (id === NANOGPT) return -1
   if (FREE_TIER.has(id)) return 0
   if (id === 'anthropic') return 2
   return 1
+}
+
+/** "3 minutes ago" style relative label for the catalogue's last-fetch timestamp. */
+function relativeTime(epochMs: number): string {
+  if (!Number.isFinite(epochMs) || epochMs <= 0) return 'never'
+  const seconds = Math.max(0, Math.round((Date.now() - epochMs) / 1000))
+  if (seconds < 60) return 'just now'
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  return `${Math.round(hours / 24)}d ago`
+}
+
+/**
+ * NanoGPT-only footer: shows how many subscription models are cached and lets the user re-fetch.
+ *
+ * A refresh that changes the chat-model SET needs an OpenCode restart, because the generated
+ * provider block is only read at spawn time — so the restart is offered right here rather than
+ * leaving the user to guess why a new model has not appeared.
+ */
+function NanogptCatalogRow({ onRestart }: { onRestart: () => Promise<void> }): JSX.Element {
+  const [chatCount, setChatCount] = useState<number | null>(null)
+  const [imageCount, setImageCount] = useState<number | null>(null)
+  const [fetchedAt, setFetchedAt] = useState(0)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      const result = await window.api.nanogpt.models()
+      setChatCount(result.chat.length)
+      setImageCount(result.image.length)
+      setFetchedAt(result.fetchedAt)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not read the cached catalogue.')
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const refresh = useCallback(async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await window.api.nanogpt.refresh()
+      setChatCount(result.chatCount)
+      setImageCount(result.imageCount)
+      setFetchedAt(result.fetchedAt)
+      if (result.restartRequired) await onRestart()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Refresh failed.')
+    } finally {
+      setBusy(false)
+    }
+  }, [onRestart])
+
+  const empty = chatCount === 0 || chatCount === null
+
+  return (
+    <div className="providers__key-set">
+      <span className="providers__key-masked">
+        {empty
+          ? 'No subscription models loaded yet'
+          : `${chatCount} chat · ${imageCount ?? 0} image models · fetched ${relativeTime(fetchedAt)}`}
+      </span>
+      <div className="providers__key-actions">
+        <button
+          type="button"
+          className={
+            empty
+              ? 'providers__key-btn providers__key-btn--primary'
+              : 'providers__key-btn'
+          }
+          onClick={() => void refresh()}
+          disabled={busy}
+          title="Fetch the models included in your NanoGPT subscription"
+        >
+          {busy ? 'Loading…' : empty ? 'Load subscription models' : 'Refresh models'}
+        </button>
+      </div>
+      {error !== null && (
+        <p className="providers__key-result providers__key-result--fail">✗ {error}</p>
+      )}
+    </div>
+  )
 }
 
 /**
@@ -146,7 +243,8 @@ function ProviderKeyCard({
   onKeyChange,
   onSave,
   onRemove,
-  onTest
+  onTest,
+  footer
 }: {
   id: string
   name: string
@@ -157,6 +255,8 @@ function ProviderKeyCard({
   keyValue: string
   saving: boolean
   testing: boolean
+  /** Provider-specific extras rendered under the key controls (NanoGPT catalogue row). */
+  footer?: JSX.Element | null
   result?: TestOutcome
   onKeyChange: (value: string) => void
   onSave: () => void
@@ -164,6 +264,7 @@ function ProviderKeyCard({
   onTest: () => void
 }): JSX.Element {
   const free = FREE_TIER.has(id)
+  const subscription = id === NANOGPT
   const url = DOCS[id] ?? FALLBACK_DOCS
   const live = isConnected(id, linkedProviderIDs)
   const modelCount = storeProvider ? Object.keys(storeProvider.models).length : 0
@@ -182,6 +283,7 @@ function ProviderKeyCard({
         </button>
         <span className="providers__tags">
           {free && <span className="providers__tag providers__tag--free">free tier</span>}
+          {subscription && <span className="providers__tag providers__tag--free">subscription</span>}
           {live && <span className="providers__tag providers__tag--ok">connected</span>}
           {!live && row && (
             <span className="providers__tag providers__key-tag--pending">key saved · restart to apply</span>
@@ -256,6 +358,7 @@ function ProviderKeyCard({
             </button>
           </div>
         )}
+        {footer ?? null}
       </div>
     </div>
   )
@@ -346,7 +449,40 @@ export function ProviderPanel({ open, onClose }: { open: boolean; onClose: () =>
           return next
         })
         await refreshRows()
-        setNeedsRestart(true)
+        // NanoGPT's provider block is generated from the cached subscription catalogue at spawn, so
+        // the catalogue has to be fetched BEFORE the restart below — otherwise the first restart
+        // injects an empty model map and the provider appears connected but has no models.
+        //
+        // A failure here is non-fatal (the key is stored and the card's "Load subscription models"
+        // button stays available), but it must not be silent: without a reported reason the user
+        // just sees a connected provider with zero models. Report it through the same result slot
+        // the Test button uses.
+        if (providerID === NANOGPT) {
+          try {
+            await window.api.nanogpt.refresh()
+          } catch (e) {
+            setTestResults((s) => ({
+              ...s,
+              [providerID]: {
+                ok: false,
+                detail: `Key saved, but loading subscription models failed: ${
+                  e instanceof Error ? e.message : 'unknown error'
+                }`
+              }
+            }))
+          }
+        }
+        // The OpenCode child receives BYOK credentials only at spawn.  Restart
+        // it here so a valid key is usable immediately rather than leaving the
+        // provider appearing saved-but-disconnected until the user notices a
+        // separate banner and restarts manually.
+        setRestarting(true)
+        try {
+          await window.api.restart()
+          setNeedsRestart(false)
+        } finally {
+          setRestarting(false)
+        }
       } catch (e) {
         setTestResults((s) => ({
           ...s,
@@ -368,9 +504,15 @@ export function ProviderPanel({ open, onClose }: { open: boolean; onClose: () =>
       })
       try {
         await window.api.keys.remove(providerID)
+        setRestarting(true)
+        try {
+          await window.api.restart()
+          setNeedsRestart(false)
+        } finally {
+          setRestarting(false)
+        }
       } finally {
         await refreshRows()
-        setNeedsRestart(true)
       }
     },
     [refreshRows]
@@ -475,6 +617,11 @@ export function ProviderPanel({ open, onClose }: { open: boolean; onClose: () =>
                     onSave={() => void handleSave(entry.id)}
                     onRemove={() => void handleRemove(entry.id)}
                     onTest={() => void handleTest(entry.id)}
+                    footer={
+                      entry.id === NANOGPT && rowsByID.has(NANOGPT) ? (
+                        <NanogptCatalogRow onRestart={handleRestart} />
+                      ) : null
+                    }
                   />
                 ))
               )}

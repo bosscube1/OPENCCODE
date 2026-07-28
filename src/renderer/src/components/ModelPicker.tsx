@@ -3,15 +3,17 @@ import type { JSX, KeyboardEvent as ReactKeyboardEvent } from 'react'
 import type { Model, Provider } from '@opencode-ai/sdk'
 import { useStore } from '../lib/store'
 import { isAgentModel } from '../lib/models'
+import { isFreeModel, isSubscriptionProvider } from '../lib/freeTier'
 
 /** Dispatched by App.tsx on Ctrl+K. */
 const FOCUS_MODEL_EVENT = 'opencode-desktop:focus-model'
 
 /**
- * Free, non-Anthropic providers surface first, in this order. Anything unknown
+ * Providers that cost the user nothing extra per request surface first, in this order.
+ * `nanogpt` leads: a flat-rate subscription is the most reliable of the group. Anything unknown
  * sorts alphabetically after them; anthropic always sinks to the bottom.
  */
-const FREE_FIRST = ['groq', 'google', 'openrouter', 'cerebras', 'mistral'] as const
+const FREE_FIRST = ['nanogpt', 'groq', 'google', 'openrouter', 'cerebras', 'mistral'] as const
 const FREE_SET = new Set<string>(FREE_FIRST)
 
 function providerRank(id: string): number {
@@ -31,8 +33,15 @@ function formatContext(n: number): string {
   return String(n)
 }
 
-type Group = { provider: Provider; free: boolean; models: Model[] }
+/** Label shown beside a provider group header, or null for providers that bill per request. */
+type GroupBadge = 'subscription' | 'free tier' | null
+type Group = { provider: Provider; badge: GroupBadge; models: Model[] }
 type Flat = { providerID: string; modelID: string }
+
+function groupBadge(providerID: string): GroupBadge {
+  if (isSubscriptionProvider(providerID)) return 'subscription'
+  return FREE_SET.has(providerID) ? 'free tier' : null
+}
 
 export function ModelPicker({ compact = false }: { compact?: boolean } = {}): JSX.Element {
   const providers = useStore((s) => s.providers)
@@ -41,6 +50,7 @@ export function ModelPicker({ compact = false }: { compact?: boolean } = {}): JS
   const setModel = useStore((s) => s.setModel)
   const autoRotate = useStore((s) => s.autoRotate)
   const toggleAutoRotate = useStore((s) => s.toggleAutoRotate)
+  const showPaidModels = useStore((s) => s.showPaidModels)
 
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -64,6 +74,7 @@ export function ModelPicker({ compact = false }: { compact?: boolean } = {}): JS
         q.length === 0 || p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q)
       const models = Object.values(p.models)
         .filter((m) => showAll || isAgentModel(m))
+        .filter((m) => showPaidModels || isFreeModel(p.id, m.id))
         .filter(
           (m) => providerHit || m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)
         )
@@ -72,10 +83,10 @@ export function ModelPicker({ compact = false }: { compact?: boolean } = {}): JS
           const bd = b.status === 'deprecated' ? 1 : 0
           return ad !== bd ? ad - bd : a.name.localeCompare(b.name)
         })
-      if (models.length > 0) out.push({ provider: p, free: FREE_SET.has(p.id), models })
+      if (models.length > 0) out.push({ provider: p, badge: groupBadge(p.id), models })
     }
     return out
-  }, [providers, query, showAll])
+  }, [providers, query, showAll, showPaidModels])
 
   const flat: Flat[] = useMemo(
     () => groups.flatMap((g) => g.models.map((m) => ({ providerID: g.provider.id, modelID: m.id }))),
@@ -263,7 +274,9 @@ export function ModelPicker({ compact = false }: { compact?: boolean } = {}): JS
               <div className="modelpicker__empty">
                 {providers.length === 0
                   ? 'No providers configured. Open Providers to connect one.'
-                  : `No model matches “${query}”.`}
+                  : !showPaidModels && query.length === 0
+                    ? 'No free model available — add a NanoGPT / Google / Groq / Mistral key in Settings, or enable "Show paid models".'
+                    : `No model matches “${query}”.`}
               </div>
             )}
 
@@ -271,7 +284,7 @@ export function ModelPicker({ compact = false }: { compact?: boolean } = {}): JS
               <div className="modelpicker__group" key={g.provider.id}>
                 <div className="modelpicker__group-head">
                   <span>{g.provider.name}</span>
-                  {g.free && <span className="modelpicker__free">free tier</span>}
+                  {g.badge !== null && <span className="modelpicker__free">{g.badge}</span>}
                 </div>
                 {g.models.map((m) => {
                   index += 1
