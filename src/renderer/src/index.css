@@ -1587,6 +1587,48 @@ body.app--resizing {
   flex: 0 0 auto;
 }
 
+/* Code-surface entry points. Always visible: the panel's own tab strip only
+   exists once the panel is already open, so these are the way in. */
+.app__status-panels {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.app__status-panelbtn {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.app__status-panelbtn:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.app__status-panelbtn:active {
+  background: var(--press);
+}
+
+.app__status-panelbtn--active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--fg);
+}
+
+.app__status-panelbtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .app__status-strong {
   color: var(--fg);
   overflow: hidden;
