@@ -130,7 +130,9 @@ npm run test
   watcher.** Writing a file into the workspace from outside the app does *not*
   refresh the file tree or git panel. Verifying `refreshTree()` / `refreshGit()`
   requires a real agent turn that edits a file - which spends the configured
-  provider's quota, so ask before doing it.
+  provider's quota, so ask before doing it. Verified this way: pointing the
+  workspace at a throwaway git repo and asking the agent to write one file made
+  it appear in both the tree and the Git panel with no manual reload.
 - **`opencode serve` is a child of the app** and survives a hard kill of
   electron alone, leaving a listener on 4599 that confuses the next run.
   `driver.ps1 stop` kills it explicitly.
