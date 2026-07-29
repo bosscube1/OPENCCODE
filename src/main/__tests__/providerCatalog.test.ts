@@ -77,4 +77,27 @@ describe('providerCatalog', () => {
   it('catalogByEnvVar resolves NANOGPT_API_KEY to the nanogpt provider', () => {
     expect(catalogByEnvVar('NANOGPT_API_KEY')?.providerID).toBe('nanogpt')
   })
+
+  it('catalogByProvider resolves moonshotai correctly', () => {
+    const entry = catalogByProvider('moonshotai')
+    expect(entry).toBeDefined()
+    expect(entry?.envVar).toBe('MOONSHOT_API_KEY')
+    expect(entry?.label).toBe('Moonshot Kimi')
+  })
+
+  it('moonshotai envVar is a member of the ALLOWLIST', () => {
+    const entry = catalogByProvider('moonshotai')
+    expect(entry).toBeDefined()
+    expect(ALLOWLIST.has(entry!.envVar)).toBe(true)
+  })
+
+  it('moonshotai test.url points at the international models endpoint', () => {
+    const entry = catalogByProvider('moonshotai')
+    expect(entry?.test?.url).toBe('https://api.moonshot.ai/v1/models')
+    expect(entry?.test?.authScheme).toBe('Bearer')
+  })
+
+  it('catalogByEnvVar resolves MOONSHOT_API_KEY to the moonshotai provider', () => {
+    expect(catalogByEnvVar('MOONSHOT_API_KEY')?.providerID).toBe('moonshotai')
+  })
 })

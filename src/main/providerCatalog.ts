@@ -106,6 +106,14 @@ export const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     test: { url: 'https://api.deepseek.com/models', authHeader: 'Authorization', authScheme: 'Bearer' }
   },
   {
+    providerID: 'moonshotai',
+    envVar: 'MOONSHOT_API_KEY',
+    label: 'Moonshot Kimi',
+    docsUrl: 'https://platform.moonshot.ai/docs',
+    // International endpoint; the key also surfaces opencode's built-in moonshotai-cn provider.
+    test: { url: 'https://api.moonshot.ai/v1/models', authHeader: 'Authorization', authScheme: 'Bearer' }
+  },
+  {
     providerID: 'xai',
     envVar: 'XAI_API_KEY',
     label: 'xAI',

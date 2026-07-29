@@ -181,6 +181,16 @@ Every handler returns `Promise<T>` and **throws** on failure (renderer catches).
 'oc:nanogpt:images:list'   (sessionID?: string) => GeneratedImageMeta[]  // METADATA ONLY
 'oc:nanogpt:images:read'   (id: string) => string | null                // base64 PNG
 'oc:nanogpt:images:delete' (id: string) => void
+
+// --- Gemini Live (WebRTC-style realtime audio/video) ---
+'oc:live:start'  () => void                       // opens gemini-3.1-flash-live-preview session
+'oc:live:stop'   () => void
+```
+
+### Listener channels (renderer -> main, `ipcMain.on`)
+
+```ts
+'oc:live:send'   (input: GeminiLiveInput) => void  // realtime audio / video / text input
 ```
 
 `oc:saveFile` gained an optional `encoding?: 'utf8' | 'base64'` (defaults to `'utf8'`, so existing
@@ -255,6 +265,7 @@ export type UpdateStatus =
 
 ```ts
 'oc:event'                 (event: { type: string; properties: any })   // every SSE event, verbatim
+'oc:live:message'          (event: GeminiLiveEvent)                      // Gemini Live message/error/closed
 'oc:server'                (status: { running: boolean; url: string | null; streamConnected: boolean; error?: string })
 //   `running` means the HTTP server answers. `streamConnected` means the SSE
 //   subscription is live. They are independent: the stream can drop and
@@ -312,6 +323,24 @@ export interface OpencodeApi {
     remove(providerID: string): Promise<void>                  // -> 'oc:keys:delete'
     test(providerID: string): Promise<{ ok: boolean; status?: number; detail?: string }>
   }
+  live: {
+    start(): Promise<void>
+    send(input: GeminiLiveInput): void
+    stop(): Promise<void>
+    onMessage(cb: (event: GeminiLiveEvent) => void): () => void
+  }
+  nanogpt: {
+    /** Cached catalogues — cheap, synchronous in main, no network. */
+    models(): Promise<NanogptModelsResult>
+    refresh(): Promise<NanogptRefreshResult>
+    usage(): Promise<NanoUsage>
+    generate(a: NanogptGenerateArgs): Promise<NanogptGenerateResult>
+    images: {
+      list(sessionID?: string): Promise<GeneratedImageMeta[]>
+      read(id: string): Promise<string | null>
+      remove(id: string): Promise<void>
+    }
+  }
   messages(directory: string, sessionID: string): Promise<MessageWithParts[]>
   revertMessage(a: { directory: string; sessionID: string; messageID: string }): Promise<void>
   searchChats(directory: string, query: string): Promise<ChatSearchHit[]>
@@ -329,6 +358,14 @@ export interface OpencodeApi {
   onQuickEntryPrompt(cb: (text: string) => void): () => void
   onUpdateStatus(cb: (status: UpdateStatus) => void): () => void
 }
+export type GeminiLiveInput =
+  | { type: 'text'; text: string }
+  | { type: 'audio'; data: string; mimeType: 'audio/pcm;rate=16000' }
+  | { type: 'video'; data: string; mimeType: 'image/jpeg' }
+export type GeminiLiveEvent =
+  | { type: 'message'; data: unknown }
+  | { type: 'error'; message: string }
+  | { type: 'closed'; code: number; reason: string }
 declare global { interface Window { api: OpencodeApi } }
 ```
 
@@ -372,6 +409,15 @@ error message, or crash file — errors reference only the providerID/envVar.
 **Catalog dependency.** `keys.ts` imports `PROVIDER_CATALOG`, `catalogByProvider` from
 `src/main/providerCatalog.ts` (Stream 3C) for the providerID → envVar mapping and per-provider
 `test` endpoints.
+
+**Moonshot Kimi (verified native against opencode 1.18.4, 2026-07-28).** `/config/providers` ships
+built-in `moonshotai` (international, `https://api.moonshot.ai/v1`) and `moonshotai-cn`
+(`https://api.moonshot.cn/v1`) providers; both read `MOONSHOT_API_KEY` from the child env
+(`source: env`). The BYOK catalog manages that single key under providerID `moonshotai`; with the
+key injected, BOTH provider ids appear in the model picker (the `-cn` row is inert for keys not
+valid on the China endpoint — that is a user choice, not app state). No config injection is needed,
+unlike NanoGPT. Test endpoint: `GET https://api.moonshot.ai/v1/models` (Bearer) — returns 401
+unauthenticated, verified reachable.
 
 ## NanoGPT provider (subscription-scoped)
 
@@ -1035,17 +1081,23 @@ export type TermId = string
                 // Renderer catches and offers reload-or-overwrite.
 
 // --- git (src/main/gitService.ts) ---
-'oc:git:status'     (directory: string) => GitStatus
+'oc:git:status'     (directory: string) => GitStatus | null
+                    // `null` = the directory is not a git repository (expected state, not an error).
 'oc:git:diff'       (args: { directory: string; path: string; staged?: boolean }) => FileDiff
-'oc:git:stage'      (args: { directory: string; paths: string[] }) => GitStatus
-'oc:git:unstage'    (args: { directory: string; paths: string[] }) => GitStatus
-'oc:git:stageHunks' (args: { directory: string; path: string; patch: string }) => GitStatus
+'oc:git:stage'      (args: { directory: string; paths: string[] }) => GitStatus | null
+                    // Returns `null` if the directory is no longer a git repository when re-read.
+'oc:git:unstage'    (args: { directory: string; paths: string[] }) => GitStatus | null
+                    // Returns `null` if the directory is no longer a git repository when re-read.
+'oc:git:stageHunks' (args: { directory: string; path: string; patch: string }) => GitStatus | null
                     // `patch` is a unified diff built in the renderer by lib/hunks.ts and
                     // applied with `git apply --cached -` over stdin.
+                    // Returns `null` if the directory is no longer a git repository when re-read.
 'oc:git:commit'     (args: { directory: string; message: string; amend?: boolean })
                       => { sha: string }
 'oc:git:branches'   (directory: string) => GitBranch[]
-'oc:git:checkout'   (args: { directory: string; branch: string; create?: boolean }) => GitStatus
+                    // Returns `[]` when the directory is not a git repository.
+'oc:git:checkout'   (args: { directory: string; branch: string; create?: boolean }) => GitStatus | null
+                    // Returns `null` if the directory is no longer a git repository when re-read.
 'oc:git:remoteUrl'  (directory: string) => string | null   // normalised https URL, for PR links
 
 // --- terminal (src/main/terminal.ts) ---
@@ -1074,14 +1126,14 @@ fs: {
   write(a: { directory: string; path: string; text: string; baseSha: string }): Promise<{ sha: string }>
 }
 git: {
-  status(directory: string): Promise<GitStatus>
+  status(directory: string): Promise<GitStatus | null>
   diff(a: { directory: string; path: string; staged?: boolean }): Promise<FileDiff>
-  stage(directory: string, paths: string[]): Promise<GitStatus>
-  unstage(directory: string, paths: string[]): Promise<GitStatus>
-  stageHunks(a: { directory: string; path: string; patch: string }): Promise<GitStatus>
+  stage(directory: string, paths: string[]): Promise<GitStatus | null>
+  unstage(directory: string, paths: string[]): Promise<GitStatus | null>
+  stageHunks(a: { directory: string; path: string; patch: string }): Promise<GitStatus | null>
   commit(a: { directory: string; message: string; amend?: boolean }): Promise<{ sha: string }>
   branches(directory: string): Promise<GitBranch[]>
-  checkout(a: { directory: string; branch: string; create?: boolean }): Promise<GitStatus>
+  checkout(a: { directory: string; branch: string; create?: boolean }): Promise<GitStatus | null>
   remoteUrl(directory: string): Promise<string | null>
 }
 term: {

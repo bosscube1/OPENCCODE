@@ -100,6 +100,13 @@ npm run test
 
 ## Gotchas
 
+- **`ELECTRON_RUN_AS_NODE=1` in the environment breaks every launch.** It makes
+  electron.exe run as plain Node: no app context, no `electron` API, and the
+  window never appears. The log ends at `starting electron app...` with an
+  empty err log (or a `BrowserWindow`/SDK module error earlier in the chain).
+  `driver.ps1` strips the variable itself; if you launch any other way, use
+  `env -u ELECTRON_RUN_AS_NODE ...`. Observed set globally in this shell on
+  2026-07-28.
 - **A stale dev instance silently hijacks your run.** The old instance holds
   port 5173 *and* the Electron single-instance lock, so a second `npm run dev`
   prints `starting electron app...`, exits, and leaves the OLD window (old

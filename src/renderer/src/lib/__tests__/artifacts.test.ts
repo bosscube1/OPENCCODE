@@ -2,8 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   extractArtifactsFromMessages,
   getArtifactTitle,
-  parseFenceHeader,
-  type Artifact
+  parseFenceHeader
 } from '../artifacts'
 import type { MessageWithParts } from '../types'
 

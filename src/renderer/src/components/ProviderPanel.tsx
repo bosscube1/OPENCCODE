@@ -28,6 +28,7 @@ const DOCS: Record<string, string> = {
   azure: 'https://learn.microsoft.com/azure/ai-services/openai/',
   'amazon-bedrock': 'https://docs.aws.amazon.com/bedrock/',
   deepseek: 'https://api-docs.deepseek.com/',
+  moonshotai: 'https://platform.moonshot.ai/docs',
   xai: 'https://docs.x.ai/',
   'github-copilot': 'https://docs.github.com/copilot',
   'github-models': 'https://docs.github.com/github-models',
@@ -64,6 +65,7 @@ const BUILTIN_PROVIDERS: { id: string; name: string }[] = [
   { id: 'fireworks', name: 'Fireworks AI' },
   { id: 'nvidia', name: 'NVIDIA' },
   { id: 'deepseek', name: 'DeepSeek' },
+  { id: 'moonshotai', name: 'Moonshot Kimi' },
   { id: 'xai', name: 'xAI' },
   { id: 'openai', name: 'OpenAI' },
   { id: 'anthropic', name: 'Anthropic' }
