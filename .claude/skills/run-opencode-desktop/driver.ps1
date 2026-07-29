@@ -1,4 +1,4 @@
-﻿<#
+<#
 driver.ps1 - launch and drive the OpenCode Desktop dev app on Windows.
 
 Agent-facing harness for the run-opencode-desktop skill. Everything here was
@@ -34,6 +34,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# ELECTRON_RUN_AS_NODE makes electron.exe behave as plain Node - no app
+# context, no 'electron' API - and the dev window never appears. This shell
+# had it set globally; strip it so Start-Process children never inherit it.
+Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $LogDir = Join-Path $env:TEMP 'opencode-desktop-run'

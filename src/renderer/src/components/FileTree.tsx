@@ -67,6 +67,11 @@ function buildRows(nodes: FileNode[], expanded: Set<string>): Row[] {
   return rows
 }
 
+/** Custom drag MIME type carrying a workspace-relative file path, so the composer can
+ *  tell an internal file-tree drag apart from an OS file drag (which populates
+ *  `dataTransfer.files` instead). Payload is the raw `FileNode.path` string. */
+export const FILE_TREE_DRAG_MIME = 'application/x-opencode-file-path'
+
 function statusClass(status: GitFileStatus | null): string {
   switch (status) {
     case 'modified':
@@ -245,6 +250,16 @@ export function FileTree(): JSX.Element {
             tabIndex={row.node.path === focusedPath ? 0 : -1}
             onFocus={() => setFocusedPath(row.node.path)}
             onClick={() => activate(row.node)}
+            draggable={row.node.kind === 'file'}
+            onDragStart={
+              row.node.kind === 'file'
+                ? (event) => {
+                    event.dataTransfer.setData(FILE_TREE_DRAG_MIME, row.node.path)
+                    event.dataTransfer.setData('text/plain', row.node.path)
+                    event.dataTransfer.effectAllowed = 'copy'
+                  }
+                : undefined
+            }
             title={row.node.path}
           >
             <span className="tree__twisty" aria-hidden="true">

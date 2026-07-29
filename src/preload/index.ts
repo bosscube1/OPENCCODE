@@ -3,9 +3,15 @@
  * Shape is fixed by CONTRACTS.md (`window.api`).
  */
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
-import type { Message, Part, Permission, Provider, Session } from '@opencode-ai/sdk'
+import type { Command, Message, Part, Permission, Provider, Session, Todo } from '@opencode-ai/sdk'
 
-export type ServerStatus = { running: boolean; url: string | null; error?: string }
+export type ServerStatus = {
+  running: boolean
+  url: string | null
+  /** SSE subscription is live. Independent of `running` — see CONTRACTS.md. */
+  streamConnected: boolean
+  error?: string
+}
 export type MessageWithParts = { info: Message; parts: Part[] }
 export type PermissionResponse = 'once' | 'always' | 'reject'
 export type OcEvent = { type: string; properties: unknown }
@@ -321,11 +327,11 @@ export interface OpencodeApi {
     update(directory: string, id: string, title: string): Promise<Session>
     summarize(a: SummarizeArgs): Promise<boolean>
     init(a: InitArgs): Promise<boolean>
-    todos(directory: string, sessionID: string): Promise<unknown[]>
+    todos(directory: string, sessionID: string): Promise<Todo[]>
     command(a: CommandArgs): Promise<void>
   }
   commands: {
-    list(directory: string): Promise<unknown[]>
+    list(directory: string): Promise<Command[]>
   }
   find: {
     files(directory: string, query: string): Promise<string[]>

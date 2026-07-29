@@ -68,7 +68,7 @@ export const useStore = create<AppState>()((set, get) => {
         const status = await api().status()
         set({ server: status })
       } catch (e) {
-        set({ server: { running: false, url: null, error: errText(e) } })
+        set({ server: { running: false, url: null, streamConnected: false, error: errText(e) } })
       }
 
       // The main process may still be spawning `opencode serve`. Poll status

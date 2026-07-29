@@ -1658,6 +1658,12 @@ body.app--resizing {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 25%, transparent);
 }
 
+/* Server up but the SSE stream is down — reconnecting, no events arriving. */
+.app__dot--warn {
+  background: var(--warn);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 25%, transparent);
+}
+
 .app__busy {
   color: var(--accent);
   display: inline-flex;
@@ -1849,4 +1855,45 @@ body.app--resizing {
   filter: brightness(1.08);
   background: var(--accent);
   border-color: var(--accent);
+}
+
+/* --------------------------------------------------------------------------
+   Error boundary fallback (per-region, not full-screen like .app__boot)
+   -------------------------------------------------------------------------- */
+
+.app__crash {
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 20px;
+  text-align: center;
+  color: var(--fg-dim);
+  background: var(--bg);
+  overflow: auto;
+}
+
+.app__crash-label {
+  font-size: 12.5px;
+  font-weight: 620;
+  color: var(--fg);
+}
+
+.app__crash-msg {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--danger);
+  background: var(--bg-inset);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
+  border-radius: 6px;
+  padding: 8px 10px;
+  max-width: 100%;
+  max-height: 140px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }

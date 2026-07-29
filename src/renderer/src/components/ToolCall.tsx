@@ -5,6 +5,8 @@ import { formatDuration } from '../lib/format'
 import { highlightCode } from '../lib/highlight'
 import { findFileRefs } from '../lib/filelinks'
 import { useStore } from '../lib/store'
+import { store } from '../lib/slices/storeRef'
+import { errText } from '../lib/slices/api'
 
 /* ------------------------------------------------------------------ *
  * Defensive narrowing. `input` is Record<string, unknown> — never cast.
@@ -111,10 +113,11 @@ const FILE_LINK_STYLE = {
 } as const
 
 function openInEditor(directory: string, path: string, line?: number, column?: number): void {
-  void window.api.openEditor({ directory, path, line, column }).catch(() => {
+  void window.api.openEditor({ directory, path, line, column }).catch((e: unknown) => {
     // Best-effort: the user's editor may not be installed, or the path may no longer be
-    // contained in the active project. Silently ignored — this is a convenience link, not a
-    // required action.
+    // contained in the active project. Not fatal to the session, but a silent no-op left
+    // the user clicking a dead link with zero feedback — surface it as a system notice.
+    store().getState().addSystemNotice(`Could not open ${path} in your editor: ${errText(e)}`)
   })
 }
 
@@ -504,10 +507,14 @@ export function ToolCall({ part }: { part: ToolPart }): ReactNode {
   const directory = useStore((state) => state.directory) ?? ''
 
   const status = part.state.status
-  const autoOpen = status === 'running' || status === 'error'
+  const kind = toolKind(part.tool)
+  // Edits render a diff (see DiffView above) that IS the point of the card — a completed
+  // edit collapsed by default would hide the one thing the user came to see. Other tool
+  // kinds (bash output, reads, etc.) keep the normal collapse-on-completion behavior.
+  const isDiffKind = kind === 'edit' || kind === 'multiedit' || kind === 'patch'
+  const autoOpen = status === 'running' || status === 'error' || (status === 'completed' && isDiffKind)
   const open = override ?? autoOpen
 
-  const kind = toolKind(part.tool)
   const title = stateTitle(part.state)
   const duration = stateDuration(part.state)
 

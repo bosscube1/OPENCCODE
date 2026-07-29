@@ -14,8 +14,7 @@ import { shell } from 'electron'
 import { assertSubpath } from './projectsPaths'
 
 /** Deep-link schemes this module is allowed to construct. Nothing else is ever produced. */
-const ALLOWED_SCHEMES = ['vscode', 'vscode-insiders', 'cursor'] as const
-type EditorScheme = (typeof ALLOWED_SCHEMES)[number]
+type EditorScheme = 'vscode' | 'vscode-insiders' | 'cursor'
 
 const DEFAULT_SCHEME: EditorScheme = 'vscode'
 

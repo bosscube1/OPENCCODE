@@ -15,6 +15,7 @@ const PANEL_BUTTONS: ReadonlyArray<{
 }> = [
   { tab: 'files', label: 'Files', hint: 'File tree (Ctrl+B)' },
   { tab: 'editor', label: 'Editor', hint: 'Review and edit files' },
+  { tab: 'changes', label: 'Changes', hint: 'Every changed file as one diff' },
   { tab: 'git', label: 'Git', hint: 'Stage and commit changes' },
   { tab: 'terminal', label: 'Terminal', hint: 'Integrated terminal (Ctrl+`)' }
 ]
@@ -71,8 +72,20 @@ export function StatusBar(): JSX.Element {
     return s.title || 'Untitled'
   }, [sessions, activeSessionID])
 
-  const dotClass = server.running ? 'app__dot app__dot--ok' : 'app__dot app__dot--bad'
-  const serverText = server.running ? hostLabel(server.url) : server.error ? 'server error' : 'offline'
+  // A running server with a dead SSE stream looks healthy but receives nothing,
+  // so it gets its own colour rather than the green one.
+  const dotClass = !server.running
+    ? 'app__dot app__dot--bad'
+    : server.streamConnected
+      ? 'app__dot app__dot--ok'
+      : 'app__dot app__dot--warn'
+  const serverText = !server.running
+    ? server.error
+      ? 'server error'
+      : 'offline'
+    : server.streamConnected
+      ? hostLabel(server.url)
+      : 'reconnecting…'
 
   const ctxUsed = contextUsed(messages)
   const ctxLimit = contextLimit(providers, providerID, modelID)

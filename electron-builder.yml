@@ -22,6 +22,10 @@ asarUnpack:
   - resources/**
   - "**/node_modules/node-pty/**"
 
+# node-pty ships N-API prebuilds (prebuilds/win32-x64) that load ABI-stably in
+# Electron — rebuilding from source needs Spectre-mitigated VS libs and is unnecessary.
+npmRebuild: false
+
 win:
   target:
     - target: nsis

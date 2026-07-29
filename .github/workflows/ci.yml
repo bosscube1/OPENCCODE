@@ -35,3 +35,7 @@ jobs:
       - run: npm run lint
 
       - run: npm run test
+
+      # Contract drift check: CONTRACTS.md must cover every IPC channel and
+      # window.api method in the code. Plain node, no install needed.
+      - run: node scripts/check-contracts.mjs

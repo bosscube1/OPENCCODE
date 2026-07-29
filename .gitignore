@@ -7,8 +7,10 @@ out/
 dist/
 dist-*/
 release/
+coverage/
 
 # agent scratch
+.claude/
 .claude-octopus/
 
 # typescript incremental / project-reference state

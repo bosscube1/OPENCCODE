@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,6 +7,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 // gitService imports `IpcMain` as a type only; nothing from electron runs at import time.
 vi.mock('electron', () => ({}))
 
+// execFile is wrapped in a spy so individual tests can inject a git failure without
+// touching the real harness (execFileSync below and the pass-through default stay real).
+vi.mock('node:child_process', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('node:child_process')>()
+  return { ...mod, execFile: vi.fn(mod.execFile) }
+})
+
 import {
   MAX_DIFF_LINES,
   checkout,
@@ -14,6 +21,7 @@ import {
   getDiff,
   getRemoteUrl,
   getStatus,
+  isNotARepoError,
   isValidBranchName,
   listBranches,
   normalizeRemoteUrl,
@@ -84,6 +92,25 @@ const itGit = (name: string, fn: () => void | Promise<void>): void => {
   it(name, async () => {
     if (!gitAvailable) return
     await fn()
+  })
+}
+
+/**
+ * Make the next (and only the next) execFile call invoke its callback with `message`
+ * as the git stderr, simulating a git invocation that exited non-zero. Everything
+ * after that one call falls through to the real execFile.
+ */
+function failNextGitCall(message: string): void {
+  const mocked = execFile as unknown as {
+    mockImplementationOnce: (fn: (...args: unknown[]) => void) => void
+  }
+  mocked.mockImplementationOnce((...args: unknown[]) => {
+    const callback = args[args.length - 1] as (
+      error: Error | null,
+      stdout: Buffer,
+      stderr: Buffer
+    ) => void
+    callback(new Error(message), Buffer.alloc(0), Buffer.from(message, 'utf8'))
   })
 }
 
@@ -169,6 +196,59 @@ describe('parsePorcelainStatus', () => {
       renamedFrom: 'old name.txt'
     })
     expect(status.entries[1]?.path).toBe('other.txt')
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* non-repository directories (expected state, not an error)           */
+/* ------------------------------------------------------------------ */
+
+describe('isNotARepoError', () => {
+  it('matches git non-repo failures, including dubious ownership', () => {
+    expect(isNotARepoError(new Error('fatal: not a git repository (or any of the parent directories): .git'))).toBe(true)
+    expect(isNotARepoError(new Error('fatal: detected dubious ownership in repository at /x'))).toBe(true)
+  })
+
+  it('does not match genuine faults', () => {
+    expect(isNotARepoError(new Error('spawn git ENOENT'))).toBe(false)
+    expect(isNotARepoError(new Error('git timed out'))).toBe(false)
+    expect(isNotARepoError('plain string')).toBe(false)
+  })
+})
+
+describe('non-repository directories', () => {
+  itGit('getStatus resolves to null instead of throwing', async () => {
+    const plain = mkdtempSync(join(tmpdir(), 'oc-nongit-'))
+    try {
+      await expect(getStatus(plain)).resolves.toBeNull()
+    } finally {
+      rmSync(plain, { recursive: true, force: true })
+    }
+  })
+
+  itGit('listBranches resolves to an empty list instead of throwing', async () => {
+    const plain = mkdtempSync(join(tmpdir(), 'oc-nongit-'))
+    try {
+      await expect(listBranches(plain)).resolves.toEqual([])
+    } finally {
+      rmSync(plain, { recursive: true, force: true })
+    }
+  })
+
+  it('a "not a git repository" failure resolves to null, not a rejection', async () => {
+    failNextGitCall('fatal: not a git repository (or any of the parent directories): .git')
+    await expect(getStatus(tmpdir())).resolves.toBeNull()
+
+    failNextGitCall('fatal: not a git repository (or any of the parent directories): .git')
+    await expect(listBranches(tmpdir())).resolves.toEqual([])
+  })
+
+  it('a genuine git failure (binary missing, timeout, ...) still throws', async () => {
+    failNextGitCall('spawn git ENOENT')
+    await expect(getStatus(tmpdir())).rejects.toThrow(/ENOENT/)
+
+    failNextGitCall('spawn git ENOENT')
+    await expect(listBranches(tmpdir())).rejects.toThrow(/ENOENT/)
   })
 })
 

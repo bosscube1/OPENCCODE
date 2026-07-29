@@ -148,6 +148,13 @@ export interface AppState {
   // editor slice
   openFile: FileContent | null
   openFileDirty: boolean
+  /**
+   * The file's text as last read from or written to disk. `openFileDirty` is
+   * this compared against the live buffer — comparing against the previous
+   * buffer instead would clear the flag whenever an edit happens to repeat the
+   * text before it, while the buffer still differs from disk.
+   */
+  openFileBaseText: string | null
   openFileDiff: FileDiff | null
   acceptedHunkIds: string[]
   openPath(path: string, line?: number): Promise<void>
@@ -176,6 +183,16 @@ export interface AppState {
   stageHunks(path: string, hunkIds: string[]): Promise<void>
   commit(message: string): Promise<void>
   generateCommitMessage(): Promise<string>
+  /**
+   * Diffs for every changed path in `gitStatus.entries`, keyed by path — backs the
+   * multi-file "Changes" review surface (ChangesPanel). Unlike `openFileDiff` (one
+   * file, editor slice), this fetches every changed file's diff up front so the
+   * whole working tree can be reviewed as one scrollable surface.
+   */
+  changedDiffs: Record<string, FileDiff>
+  changedDiffsLoading: boolean
+  /** Re-fetches `changedDiffs` from the current `gitStatus`. No-ops without a directory or status. */
+  loadChangedDiffs(): Promise<void>
 
   // terminal slice
   terminals: Array<{ id: TermId; title: string }>
@@ -186,7 +203,7 @@ export interface AppState {
   killTerminal(id: TermId): Promise<void>
 
   // ui slice — panel additions
-  panelTab: 'files' | 'editor' | 'git' | 'terminal' | 'artifacts' | null
+  panelTab: 'files' | 'editor' | 'git' | 'terminal' | 'artifacts' | 'changes' | null
   setPanelTab(tab: AppState['panelTab']): void
   paletteOpen: boolean
   setPaletteOpen(open: boolean): void

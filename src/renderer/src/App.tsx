@@ -15,8 +15,10 @@ import { LiveScreenAssistant } from './components/LiveScreenAssistant'
 import { FileTree } from './components/FileTree'
 import { EditorPanel } from './components/EditorPanel'
 import { GitPanel } from './components/GitPanel'
+import { ChangesPanel } from './components/ChangesPanel'
 import { TerminalPanel } from './components/TerminalPanel'
 import { CommandPalette } from './components/CommandPalette'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { useStore } from './lib/store'
 import type { AppState } from './lib/slices/types'
 import './components/panels.css'
@@ -25,10 +27,11 @@ import './index.css'
 type PanelTab = AppState['panelTab']
 
 /** Tab order in the right-hand code-surface panel. */
-const PANEL_TABS = ['files', 'editor', 'git', 'terminal', 'artifacts'] as const
+const PANEL_TABS = ['files', 'editor', 'changes', 'git', 'terminal', 'artifacts'] as const
 const PANEL_LABELS: Record<(typeof PANEL_TABS)[number], string> = {
   files: 'Files',
   editor: 'Editor',
+  changes: 'Changes',
   git: 'Git',
   terminal: 'Terminal',
   artifacts: 'Artifacts'
@@ -367,13 +370,20 @@ export function App(): JSX.Element {
             </button>
           </div>
         )}
-        {activeView === 'projects' ? (
-          <ProjectView />
-        ) : activeView === 'images' ? (
-          <ImagesView />
-        ) : (
-          <Chat />
-        )}
+        {/* Keyed on the view so switching away from a crashed one remounts the
+            boundary — without this the error state outlives the view that threw. */}
+        <ErrorBoundary
+          key={activeView}
+          label={activeView === 'projects' ? 'Projects' : activeView === 'images' ? 'Images' : 'Chat'}
+        >
+          {activeView === 'projects' ? (
+            <ProjectView />
+          ) : activeView === 'images' ? (
+            <ImagesView />
+          ) : (
+            <Chat />
+          )}
+        </ErrorBoundary>
       </main>
 
       {panelOpen && (
@@ -407,11 +417,36 @@ export function App(): JSX.Element {
             </button>
           </div>
           <div className="panel__body">
-            {effectivePanelTab === 'files' && <FileTree />}
-            {effectivePanelTab === 'editor' && <EditorPanel />}
-            {effectivePanelTab === 'git' && <GitPanel />}
-            {effectivePanelTab === 'terminal' && <TerminalPanel />}
-            {effectivePanelTab === 'artifacts' && <ArtifactsPanel />}
+            {effectivePanelTab === 'files' && (
+              <ErrorBoundary label="Files">
+                <FileTree />
+              </ErrorBoundary>
+            )}
+            {effectivePanelTab === 'editor' && (
+              <ErrorBoundary label="Editor">
+                <EditorPanel />
+              </ErrorBoundary>
+            )}
+            {effectivePanelTab === 'changes' && (
+              <ErrorBoundary label="Changes">
+                <ChangesPanel />
+              </ErrorBoundary>
+            )}
+            {effectivePanelTab === 'git' && (
+              <ErrorBoundary label="Git">
+                <GitPanel />
+              </ErrorBoundary>
+            )}
+            {effectivePanelTab === 'terminal' && (
+              <ErrorBoundary label="Terminal">
+                <TerminalPanel />
+              </ErrorBoundary>
+            )}
+            {effectivePanelTab === 'artifacts' && (
+              <ErrorBoundary label="Artifacts">
+                <ArtifactsPanel />
+              </ErrorBoundary>
+            )}
           </div>
         </div>
       )}

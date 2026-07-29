@@ -152,3 +152,121 @@
   opacity: 0.45;
   cursor: default;
 }
+
+/* --------------------------------------------------------------------------
+   ChangesPanel — multi-file review surface ("changes" panel tab)
+   Namespace: .changes
+   One scrollable list of collapsible file sections; each section's diff body
+   reuses the .editor__hunk / .editor__line chrome from editor.css so it reads
+   identically to the single-file diff in EditorPanel. `.panel__body` (above)
+   already provides the outer scroll + padding, so `.changes` itself does not
+   scroll or pad again.
+   -------------------------------------------------------------------------- */
+
+.changes__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.changes__file {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-alt);
+  overflow: hidden;
+}
+
+.changes__file-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-inset);
+}
+
+.changes__file-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+
+.changes__file-caret {
+  flex: 0 0 auto;
+  width: 1ch;
+  color: var(--fg-dim);
+}
+
+.changes__glyph {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius);
+  font-size: 10.5px;
+  font-weight: 700;
+  font-family: var(--mono);
+}
+
+.changes__glyph--ok {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 16%, transparent);
+}
+
+.changes__glyph--warn {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+}
+
+.changes__glyph--danger {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+}
+
+.changes__glyph--dim {
+  color: var(--fg-dim);
+  background: var(--hover);
+}
+
+.changes__file-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+}
+
+.changes__open-btn {
+  flex: 0 0 auto;
+}
+
+.changes__file-body {
+  border-top: 1px solid var(--border);
+  padding: 10px;
+}
+
+.changes__file-note {
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+/* Undo the flex/scroll sizing `.editor__diff` normally gets from EditorPanel's
+   fixed-height flex column — here it just lays out inline inside the page's
+   own scroll, so it must not try to own a second scroll region. */
+.changes__diff.editor__diff {
+  flex: 0 0 auto;
+  overflow: visible;
+  padding: 0;
+  gap: 8px;
+}

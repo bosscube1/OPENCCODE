@@ -20,6 +20,12 @@ import { nanogptEnv, readCache } from './nanogptConfig'
 export type ServerStatus = {
   running: boolean
   url: string | null
+  /**
+   * Whether the SSE subscription is live. Independent of `running`: the stream
+   * can drop and reconnect on its own backoff while the HTTP server stays up,
+   * and no events arrive in between.
+   */
+  streamConnected: boolean
   error?: string
 }
 
@@ -40,7 +46,7 @@ const NOT_FOUND_MESSAGE = 'OpenCode CLI not found — run: npm i -g opencode-ai'
 
 let child: ChildProcess | null = null
 let client: OpencodeClient | null = null
-let status: ServerStatus = { running: false, url: null }
+let status: ServerStatus = { running: false, url: null, streamConnected: false }
 /** true only when this process spawned the server it is talking to */
 let owned = false
 let stopping = false
@@ -101,6 +107,12 @@ function setStatus(next: ServerStatus): void {
       /* a listener must never break the supervisor */
     }
   }
+}
+
+/** Patch just the stream flag, leaving the rest of the status snapshot alone. */
+function setStreamConnected(connected: boolean): void {
+  if (status.streamConnected === connected) return
+  setStatus({ ...status, streamConnected: connected })
 }
 
 function emitEvent(event: OpencodeEvent): void {
@@ -276,6 +288,7 @@ async function runEventLoop(generation: number): Promise<void> {
         directory ? { query: { directory }, signal: abort.signal } : { signal: abort.signal }
       )
       backoff = RECONNECT_MIN_MS
+      setStreamConnected(true)
       for await (const event of stream) {
         if (stopping || generation !== eventGeneration) break
         emitEvent(event)
@@ -284,6 +297,9 @@ async function runEventLoop(generation: number): Promise<void> {
       if (abort.signal.aborted || stopping || generation !== eventGeneration) break
       record(`event stream error: ${errText(error)}`)
     } finally {
+      // Covers both a thrown subscribe and a stream that simply ended: either
+      // way events have stopped arriving, and the UI needs to say so.
+      setStreamConnected(false)
       if (eventAbort === abort) eventAbort = null
       if (!abort.signal.aborted) abort.abort()
     }
@@ -301,7 +317,7 @@ async function runEventLoop(generation: number): Promise<void> {
 function fail(message: string): ServerStatus {
   client = null
   authorizedProviderIDs.clear()
-  setStatus({ running: false, url: null, error: message })
+  setStatus({ running: false, url: null, streamConnected: false, error: message })
   return { ...status }
 }
 
@@ -401,6 +417,7 @@ async function doStart(): Promise<ServerStatus> {
     setStatus({
       running: false,
       url: null,
+      streamConnected: false,
       error: `OpenCode server stopped (${exitInfo}).`
     })
   })
@@ -423,7 +440,8 @@ async function doStart(): Promise<ServerStatus> {
   }
 
   client = createOpencodeClient({ baseUrl: url })
-  setStatus({ running: true, url })
+  // The stream is not up until `event.subscribe` resolves inside the loop.
+  setStatus({ running: true, url, streamConnected: false })
   startEventLoop()
   return { ...status }
 }
@@ -460,7 +478,7 @@ export function stopServer(): void {
   if (proc && wasOwned) killTree(proc)
 
   if (status.running || status.url !== null) {
-    setStatus({ running: false, url: null })
+    setStatus({ running: false, url: null, streamConnected: false })
   }
 }
 

@@ -49,28 +49,9 @@ export const ALLOWLIST: ReadonlySet<string> = new Set([
   'HYPERBOLIC_API_KEY',
   'OPENAI_API_KEY',
   'DEEPSEEK_API_KEY',
+  'MOONSHOT_API_KEY',
   'XAI_API_KEY',
   'ANTHROPIC_API_KEY'
-])
-
-/**
- * Keys that must NEVER reach the child process even if the user has them set
- * as OS-level environment variables. The allowlist above only guards the `.env`
- * file-read path; this blocklist guards the `process.env` passthrough path.
- */
-const BLOCKLIST: ReadonlySet<string> = new Set([
-  'KUCOIN_API_KEY', 'KUCOIN_API_SECRET', 'KUCOIN_API_PASSPHRASE',
-  'BINANCE_API_KEY', 'BINANCE_API_SECRET',
-  'BYBIT_API_KEY', 'BYBIT_API_SECRET',
-  'COINBASE_API_KEY', 'COINBASE_API_SECRET',
-  'KRAKEN_API_KEY', 'KRAKEN_API_SECRET',
-  'OKX_API_KEY', 'OKX_API_SECRET', 'OKX_API_PASSPHRASE',
-  'ETHERSCAN_API_KEY', 'ALCHEMY_API_KEY',
-  'COINGECKO_API_KEY', 'COINMARKETCAP_API_KEY',
-  'COINCAP_API_KEY', 'COINPAPRIKA_API_KEY',
-  'CRYPTOCOMPARE_API_KEY', 'MESSARI_API_KEY',
-  'COINAPI_KEY', 'COINGLASS_API_KEY',
-  'TAVILY_API_KEY',
 ])
 
 /**

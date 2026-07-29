@@ -20,7 +20,8 @@
 
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react'
 import { useStore } from '../lib/store'
-import type { FileDiff, Hunk } from '../lib/types'
+import type { FileDiff } from '../lib/types'
+import { HunkView } from './HunkView'
 import './editor.css'
 
 type Monaco = typeof import('monaco-editor')
@@ -203,38 +204,6 @@ function MonacoHost({ path, text, language, isDark, onChange, onSave }: MonacoHo
     <div className="editor__monaco-wrap">
       {status === 'loading' && <div className="editor__loading">Loading editor…</div>}
       <div ref={containerRef} className="editor__monaco" />
-    </div>
-  )
-}
-
-function HunkView({
-  hunk,
-  accepted,
-  onToggle
-}: {
-  hunk: Hunk
-  accepted: boolean
-  onToggle: () => void
-}): JSX.Element {
-  return (
-    <div className={`editor__hunk${accepted ? ' editor__hunk--accepted' : ''}`}>
-      <div className="editor__hunk-head">
-        <span className="editor__hunk-header">{hunk.header}</span>
-        <label className="editor__hunk-toggle">
-          <input type="checkbox" checked={accepted} onChange={onToggle} />
-          {accepted ? 'Accepted' : 'Accept'}
-        </label>
-      </div>
-      <pre className="editor__hunk-lines">
-        {hunk.lines.map((line, i) => (
-          <div key={i} className={`editor__line editor__line--${line.kind}`}>
-            <span className="editor__line-marker">
-              {line.kind === 'add' ? '+' : line.kind === 'del' ? '-' : ' '}
-            </span>
-            <span className="editor__line-text">{line.text}</span>
-          </div>
-        ))}
-      </pre>
     </div>
   )
 }

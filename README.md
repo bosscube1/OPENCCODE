@@ -11,6 +11,19 @@ model picker is populated entirely from whatever providers you have authenticate
 
 ---
 
+## Download
+
+Pre-built Windows installers are published on the
+[GitHub Releases](https://github.com/bosscube1/OPENCCODE/releases) page:
+
+- `OpenCode Desktop-<version>-setup.exe` — NSIS installer (per-user, desktop + start-menu
+  shortcuts)
+- `OpenCode Desktop-<version>-portable.exe` — portable build, no installation needed
+
+Installed copies auto-update via `electron-updater` from the release feed.
+
+---
+
 ## Architecture
 
 ```
@@ -109,8 +122,10 @@ npm install          # first time only
 
 npm run dev          # electron-vite dev — Vite HMR for the renderer, hot restart for main
 npm run typecheck    # tsc over both projects (node + web); must be clean before a PR
+npm run test         # vitest unit tests (main services + renderer helpers/slices)
+npm run lint         # ESLint; 0 errors required
 npm run build        # production bundle into out/
-npm run dist:win     # build + package a Windows app into dist/
+npm run dist:win     # build + package the Windows NSIS installer and portable .exe into dist/
 ```
 
 - `npm run dev` starts the Vite dev server on `http://127.0.0.1:5173` and opens the Electron
@@ -118,9 +133,11 @@ npm run dist:win     # build + package a Windows app into dist/
 - `npm run typecheck` runs two passes — `tsconfig.node.json` (config file, `src/main`,
   `src/preload`) and `tsconfig.web.json` (`src/renderer/src`) — both with `--composite false`
   so nothing is emitted.
-- `npm run dist:win` runs `electron-builder --win --dir`, producing an unpacked app under
-  `dist/win-unpacked`. Drop the `--dir` from the script to get the NSIS installer and the
-  portable `.exe` configured in `electron-builder.yml`.
+- `npm run dist:win` runs `electron-builder --win`, producing the NSIS installer
+  (`OpenCode Desktop-<version>-setup.exe`), the portable build
+  (`OpenCode Desktop-<version>-portable.exe`), and the auto-update feed (`latest.yml`)
+  under `dist/`. For a quick unpacked build without the installers, use
+  `npm run dist:win:dir`, which produces `dist/win-unpacked`.
 
 ---
 

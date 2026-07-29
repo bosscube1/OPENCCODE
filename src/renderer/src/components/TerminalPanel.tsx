@@ -175,7 +175,6 @@ function TerminalInstance({
       termRef.current = null
       fitRef.current = null
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
   // Track theme changes without recreating the terminal.
@@ -229,7 +228,11 @@ export function TerminalPanel(): JSX.Element {
   const activeTermID = localActiveTermID
 
   const themeTick = useThemeTick()
-  const theme = useMemo(() => readTerminalTheme(), [themeTick])
+  // themeTick is an invalidation signal, not an input: re-read the theme tokens when it bumps.
+  const theme = useMemo(() => {
+    void themeTick
+    return readTerminalTheme()
+  }, [themeTick])
 
   if (terminals.length === 0) {
     return (
