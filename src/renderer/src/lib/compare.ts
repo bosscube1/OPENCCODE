@@ -23,24 +23,11 @@ export const MAX_COMPARE_TARGETS = 4
 export const COMPARE_TITLE_PREFIX = '⇄ '
 
 /**
- * Tools disabled on every compare prompt.
- *
- * THIS IS A SAFETY INVARIANT, not a preference. All N columns run against the SAME working tree
- * concurrently; if they could write, edit, patch or shell out they would race and corrupt the user's
- * repository. `promptAsync`'s `tools` map (verified present in the SDK's
- * `SessionPromptAsyncData.body`) disables them per request, so no config change is needed and normal
- * single-model chat is completely unaffected.
- *
- * Columns can still READ the repo, which is what makes the comparison meaningful. To get a true
- * agentic bake-off, each column would need its own git worktree — deliberately out of scope.
+ * Tools disabled on every compare prompt — a safety invariant, not a preference: all N columns
+ * share ONE working tree and would corrupt it if they could write. Defined in `toolPolicies.ts`
+ * (shared with the composer's read-only session toggle) and re-exported here.
  */
-export const READONLY_TOOLS: Readonly<Record<string, boolean>> = Object.freeze({
-  write: false,
-  edit: false,
-  patch: false,
-  bash: false,
-  task: false
-})
+export { READONLY_TOOLS } from './toolPolicies'
 
 /** One model's column in a compare run. */
 export type CompareColumn = {

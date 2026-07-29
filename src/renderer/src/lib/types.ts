@@ -29,7 +29,8 @@ export type {
   ToolState,
   Provider,
   Model,
-  Permission
+  Permission,
+  Agent
 } from '@opencode-ai/sdk'
 
 // SDK types for new features (Phase 0+)
@@ -90,6 +91,21 @@ export type AppSettingsResult = {
   settings: AppSettings
   shortcutRegistered: boolean
   shortcutError?: string
+}
+
+/* ------------------------------------------------------------------ *
+ * Project-config permissions (`oc:config:permission:get/set`)
+ * Structurally identical to the preload and main-process copies.
+ * ------------------------------------------------------------------ */
+
+export type PermissionLevel = 'ask' | 'allow' | 'deny'
+
+export type PermissionConfig = {
+  edit?: PermissionLevel
+  bash?: PermissionLevel | Record<string, PermissionLevel>
+  webfetch?: PermissionLevel
+  doom_loop?: PermissionLevel
+  external_directory?: PermissionLevel
 }
 
 /* ------------------------------------------------------------------ *

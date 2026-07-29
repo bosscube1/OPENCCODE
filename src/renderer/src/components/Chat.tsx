@@ -5,6 +5,7 @@ import { isTextPart } from '../lib/types'
 import { MessageView } from './MessageView'
 import { Composer } from './Composer'
 import { PermissionPrompt } from './PermissionPrompt'
+import { SubagentTabs, SubagentView } from './SubagentTabs'
 import { TodoPanel } from './TodoPanel'
 import { ChatSearch, SCROLL_TO_MESSAGE_EVENT } from './ChatSearch'
 import { exportMarkdown } from '../lib/exportMarkdown'
@@ -46,6 +47,25 @@ export function Chat(): ReactNode {
   const pickDirectory = useStore((state) => state.pickDirectory)
   const newSession = useStore((state) => state.newSession)
   const send = useStore((state) => state.send)
+  const subagentTabCount = useStore((state) => state.subagentTabs.length)
+  const activeSubagentTab = useStore((state) => state.activeSubagentTab)
+  /** Set while the active session is reverted to an earlier point (SDK `Session.revert`). */
+  const revertInfo = useStore((state) => {
+    const id = state.activeSessionID
+    if (!id) return undefined
+    return state.sessions.find((s) => s.id === id)?.revert
+  })
+  const unrevertSession = useStore((state) => state.unrevertSession)
+  // True when a subagent tab is being viewed instead of the main transcript.
+  const viewingSubagent = activeSubagentTab !== null
+
+  // Messages at/after the revert point are the hidden ones — countable only while the
+  // local transcript still contains them (an optimistic edit-and-resend slices it).
+  let hiddenCount = 0
+  if (revertInfo) {
+    const idx = messages.findIndex((m) => m.info.id === revertInfo.messageID)
+    if (idx >= 0) hiddenCount = messages.length - idx
+  }
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const innerRef = useRef<HTMLDivElement | null>(null)
@@ -76,10 +96,11 @@ export function Chat(): ReactNode {
     if (next !== detachedRef.current) setDetachedBoth(next)
   }, [setDetachedBoth])
 
-  // New content: follow it only when the user has not scrolled away.
+  // New content: follow it only when the user has not scrolled away. Returning from a
+  // subagent tab remounts the scroll container, so re-follow on that transition too.
   useLayoutEffect(() => {
     if (!detachedRef.current) scrollToBottom()
-  }, [messages, scrollToBottom])
+  }, [messages, scrollToBottom, viewingSubagent])
 
   // Streaming grows the transcript without changing its identity — watch the box.
   useEffect(() => {
@@ -206,92 +227,97 @@ export function Chat(): ReactNode {
           </button>
         </div>
       )}
-      <div className="chat__scroll" ref={scrollRef} onScroll={onScroll}>
-        <div className="chat__inner" ref={innerRef}>
-          {activeSessionID === null ? (
-            <div className="chat__empty">
-              <div className="chat__emptyglyph" aria-hidden="true">
-                ◇
-              </div>
-              <h2 className="chat__emptytitle">
-                {directory === null ? 'Open a folder to get started' : 'No session selected'}
-              </h2>
-              <p className="chat__emptybody">
-                {directory === null
-                  ? 'opencode-desktop works against a project directory. Pick one and start a session — any provider, any model.'
-                  : `Working in ${folderName(directory)}. Start a new session or pick one from the sidebar.`}
-              </p>
-              <div className="chat__emptyactions">
-                {directory === null ? (
-                  <button
-                    type="button"
-                    className="chat__cta"
-                    onClick={() => {
-                      void pickDirectory()
-                    }}
-                  >
-                    Open folder…
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="chat__cta"
-                    onClick={() => {
-                      void newSession()
-                    }}
-                  >
-                    New session
-                  </button>
-                )}
-              </div>
-              {directory !== null ? <code className="chat__emptypath">{directory}</code> : null}
-            </div>
-          ) : showEmptySession ? (
-            <div className="chat__empty">
-              <div className="chat__emptyglyph" aria-hidden="true">
-                ✦
-              </div>
-              <h2 className="chat__emptytitle">What should we build?</h2>
-              <p className="chat__emptybody">
-                {directory === null
-                  ? 'Describe a change and the agent will work through it.'
-                  : `This session is scoped to ${folderName(directory)}. Describe a change and the agent will work through it.`}
-              </p>
-              <ul className="chat__suggestions">
-                {SUGGESTIONS.map((suggestion) => (
-                  <li key={suggestion}>
+      {subagentTabCount > 0 ? <SubagentTabs /> : null}
+      {viewingSubagent ? (
+        <SubagentView sessionID={activeSubagentTab} />
+      ) : (
+        <div className="chat__scroll" ref={scrollRef} onScroll={onScroll}>
+          <div className="chat__inner" ref={innerRef}>
+            {activeSessionID === null ? (
+              <div className="chat__empty">
+                <div className="chat__emptyglyph" aria-hidden="true">
+                  ◇
+                </div>
+                <h2 className="chat__emptytitle">
+                  {directory === null ? 'Open a folder to get started' : 'No session selected'}
+                </h2>
+                <p className="chat__emptybody">
+                  {directory === null
+                    ? 'opencode-desktop works against a project directory. Pick one and start a session — any provider, any model.'
+                    : `Working in ${folderName(directory)}. Start a new session or pick one from the sidebar.`}
+                </p>
+                <div className="chat__emptyactions">
+                  {directory === null ? (
                     <button
                       type="button"
-                      className="chat__suggestion"
-                      disabled={!canPrompt}
-                      onClick={() => runSuggestion(suggestion)}
+                      className="chat__cta"
+                      onClick={() => {
+                        void pickDirectory()
+                      }}
                     >
-                      {suggestion}
+                      Open folder…
                     </button>
-                  </li>
-                ))}
-              </ul>
-              {!canPrompt ? (
-                <p className="chat__emptyhint">Choose a model before sending your first prompt.</p>
-              ) : null}
-            </div>
-          ) : (
-            messages.map((message) => (
-              <div
-                key={message.info.id}
-                id={messageDomID(message.info.id)}
-                className={
-                  findOpen && findMatches[findIndex] === message.info.id
-                    ? 'chat__msgwrap chat__msgwrap--findactive'
-                    : 'chat__msgwrap'
-                }
-              >
-                <MessageView message={message} />
+                  ) : (
+                    <button
+                      type="button"
+                      className="chat__cta"
+                      onClick={() => {
+                        void newSession()
+                      }}
+                    >
+                      New session
+                    </button>
+                  )}
+                </div>
+                {directory !== null ? <code className="chat__emptypath">{directory}</code> : null}
               </div>
-            ))
-          )}
+            ) : showEmptySession ? (
+              <div className="chat__empty">
+                <div className="chat__emptyglyph" aria-hidden="true">
+                  ✦
+                </div>
+                <h2 className="chat__emptytitle">What should we build?</h2>
+                <p className="chat__emptybody">
+                  {directory === null
+                    ? 'Describe a change and the agent will work through it.'
+                    : `This session is scoped to ${folderName(directory)}. Describe a change and the agent will work through it.`}
+                </p>
+                <ul className="chat__suggestions">
+                  {SUGGESTIONS.map((suggestion) => (
+                    <li key={suggestion}>
+                      <button
+                        type="button"
+                        className="chat__suggestion"
+                        disabled={!canPrompt}
+                        onClick={() => runSuggestion(suggestion)}
+                      >
+                        {suggestion}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                {!canPrompt ? (
+                  <p className="chat__emptyhint">Choose a model before sending your first prompt.</p>
+                ) : null}
+              </div>
+            ) : (
+              messages.map((message) => (
+                <div
+                  key={message.info.id}
+                  id={messageDomID(message.info.id)}
+                  className={
+                    findOpen && findMatches[findIndex] === message.info.id
+                      ? 'chat__msgwrap chat__msgwrap--findactive'
+                      : 'chat__msgwrap'
+                  }
+                >
+                  <MessageView message={message} />
+                </div>
+              ))
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {findOpen ? (
         <div className="chat__findbar" role="search" aria-label="Find in session">
@@ -388,8 +414,31 @@ export function Chat(): ReactNode {
           </div>
         ) : null}
 
+        {revertInfo && !viewingSubagent ? (
+          <div className="chat__revert" role="status">
+            <span className="chat__reverttext">
+              This chat is reverted to an earlier point
+              {hiddenCount > 0
+                ? ` — ${hiddenCount} message${hiddenCount === 1 ? '' : 's'} hidden`
+                : ' — later messages are hidden'}
+              .
+            </span>
+            <button
+              type="button"
+              className="chat__revertbtn"
+              onClick={() => {
+                void unrevertSession()
+              }}
+            >
+              Restore
+            </button>
+          </div>
+        ) : null}
+
         <TodoPanel />
-        <Composer />
+        {/* The composer stays bound to the main session; the subagent view is read-only
+            and shows its own notice bar with a stop control instead. */}
+        {viewingSubagent ? null : <Composer />}
       </div>
 
       <ChatSearch open={searchOpen} onClose={() => setSearchOpen(false)} />

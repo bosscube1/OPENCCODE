@@ -24,6 +24,21 @@ export function Composer(): ReactNode {
   const queuedPrompts = useStore((state) => state.queuedPrompts)
   const queuePrompt = useStore((state) => state.queuePrompt)
   const removeQueued = useStore((state) => state.removeQueued)
+  const agents = useStore((state) => state.agents)
+  const activeAgent = useStore((state) =>
+    state.activeSessionID ? state.sessionAgents[state.activeSessionID] : undefined
+  )
+  const readOnly = useStore((state) =>
+    state.activeSessionID ? state.sessionReadOnly[state.activeSessionID] === true : false
+  )
+  const setSessionAgent = useStore((state) => state.setSessionAgent)
+  const setSessionReadOnly = useStore((state) => state.setSessionReadOnly)
+
+  // Subagents (mode 'subagent') are not selectable as the session's driver.
+  const primaryAgents = useMemo(
+    () => agents.filter((a) => a.mode === 'primary' || a.mode === 'all'),
+    [agents]
+  )
 
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
@@ -372,6 +387,39 @@ export function Composer(): ReactNode {
         <div className="composer__actions">
           <div className="composer__actions-left">
             <ModelPicker compact />
+            {activeSessionID && primaryAgents.length > 0 && (
+              <select
+                className={`composer__agent${activeAgent ? ' composer__agent--active' : ''}`}
+                value={activeAgent ?? ''}
+                onChange={(event) =>
+                  setSessionAgent(activeSessionID, event.target.value === '' ? null : event.target.value)
+                }
+                title="Agent to run this session's prompts with"
+                aria-label="Agent"
+              >
+                <option value="">Default</option>
+                {primaryAgents.map((a) => (
+                  <option key={a.name} value={a.name}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            {activeSessionID && (
+              <button
+                type="button"
+                className={`composer__pill${readOnly ? ' composer__pill--active' : ''}`}
+                aria-pressed={readOnly}
+                onClick={() => setSessionReadOnly(activeSessionID, !readOnly)}
+                title={
+                  readOnly
+                    ? 'Read-only is ON — the agent cannot write, edit, patch, or run shell commands'
+                    : 'Make this session read-only'
+                }
+              >
+                🔒 Read-only
+              </button>
+            )}
           </div>
           <div className="composer__actions-right">
           {canSend && (
@@ -418,6 +466,12 @@ export function Composer(): ReactNode {
           <span className="composer__hint composer__hint--warn">{blocked}</span>
         ) : (
           <span className="composer__hint">Enter to send · Type / for slash commands</span>
+        )}
+        {(activeAgent || readOnly) && (
+          <span className="composer__flags">
+            {activeAgent && <span className="composer__flag">agent: {activeAgent}</span>}
+            {readOnly && <span className="composer__flag composer__flag--lock">read-only</span>}
+          </span>
         )}
       </div>
     </div>

@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { initCrashLog, logCrash } from './crashlog'
+import { stopAllGeminiLive } from './geminiLive'
 import { registerIpc, unregisterIpc } from './ipc'
 import { setupApplicationMenu } from './menu'
 import { createAppSettingsController, type AppSettingsController } from './appSettings'
@@ -430,6 +431,7 @@ if (!allowDevelopmentInstance && !app.requestSingleInstanceLock()) {
     tray = null
     quickEntry?.destroy()
     quickEntry = null
+    stopAllGeminiLive()
     stopServer()
     unregisterIpc()
   })
@@ -437,6 +439,7 @@ if (!allowDevelopmentInstance && !app.requestSingleInstanceLock()) {
   app.on('will-quit', () => {
     if (shuttingDown) return
     shuttingDown = true
+    stopAllGeminiLive()
     stopServer()
     unregisterIpc()
   })

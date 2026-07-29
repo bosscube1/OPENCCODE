@@ -4,8 +4,10 @@
  */
 import { writeFile } from 'node:fs/promises'
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
-import type { Message, Part, Provider, Session } from '@opencode-ai/sdk'
+import type { Agent, Message, Part, Provider, Session } from '@opencode-ai/sdk'
 import { getAuthorizedProviderIDs, getClient, getStatus, isAuthorizedProvider, restartServer, setEventDirectory, type ServerStatus } from './server'
+import { getPermissionConfig, setPermissionConfig, validatePermissionConfig, type PermissionConfig } from './configService'
+import { optionalAgentName, optionalToolPolicy } from './promptValidation'
 import { register as registerFs } from './fsService'
 import { register as registerGit } from './gitService'
 import { register as registerTerminal } from './terminal'
@@ -31,6 +33,7 @@ import {
 } from './mcp'
 import type { AppSettingsController, AppSettingsResult } from './appSettings'
 import { sendGeminiLive, startGeminiLive, stopGeminiLive, type GeminiLiveInput } from './geminiLive'
+import { saveLiveTranscript } from './liveTranscripts'
 import { markBalanceBilled, readCache, refreshCatalogs, type RefreshResult } from './nanogptConfig'
 import {
   fetchSubscriptionUsage,
@@ -124,6 +127,10 @@ const CHANNELS = [
   'oc:exportChat',
   'oc:saveFile',
   'oc:messages:revert',
+  'oc:messages:unrevert',
+  'oc:agents:list',
+  'oc:config:permission:get',
+  'oc:config:permission:set',
   'oc:search:chats',
   'oc:keys:list',
   'oc:keys:set',
@@ -131,6 +138,7 @@ const CHANNELS = [
   'oc:keys:test',
   'oc:live:start',
   'oc:live:stop',
+  'oc:live:saveTranscript',
   'oc:nanogpt:models',
   'oc:nanogpt:refresh',
   'oc:nanogpt:usage',
@@ -255,39 +263,6 @@ function requireObject(value: unknown, name: string): Record<string, unknown> {
 function requirePermissionResponse(value: unknown): PermissionResponse {
   if (value === 'once' || value === 'always' || value === 'reject') return value
   throw new Error(`Invalid permission response: ${String(value)}`)
-}
-
-/** Maximum entries in a per-request tool policy — well above any legitimate use. */
-const MAX_TOOL_POLICY_KEYS = 64
-
-/**
- * Validate an optional per-request tool policy for `promptAsync`.
- *
- * Every key lands in the agent's tool registry, so this is an allowlisted character class rather than
- * a blocklist: lowercase identifiers only, booleans only, bounded size. Returns undefined when absent
- * so the body field is omitted entirely and default tool behaviour is untouched.
- */
-function optionalToolPolicy(value: unknown): Record<string, boolean> | undefined {
-  if (value === undefined || value === null) return undefined
-  if (typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('Invalid IPC argument: tools must be an object of boolean flags.')
-  }
-  const entries = Object.entries(value as Record<string, unknown>)
-  if (entries.length === 0) return undefined
-  if (entries.length > MAX_TOOL_POLICY_KEYS) {
-    throw new Error(`Invalid IPC argument: tools may not exceed ${MAX_TOOL_POLICY_KEYS} entries.`)
-  }
-  const policy: Record<string, boolean> = {}
-  for (const [key, flag] of entries) {
-    if (!/^[a-z_][a-z0-9_]{0,63}$/.test(key)) {
-      throw new Error(`Invalid IPC argument: "${key}" is not a valid tool name.`)
-    }
-    if (typeof flag !== 'boolean') {
-      throw new Error(`Invalid IPC argument: tools.${key} must be a boolean.`)
-    }
-    policy[key] = flag
-  }
-  return policy
 }
 
 /* ------------------------------------------------------------------ */
@@ -470,6 +445,10 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
     // the agent's tool registry, so only conservative identifiers are accepted.
     const tools = optionalToolPolicy(args.tools)
 
+    // Optional agent override (e.g. "plan"). Validated against the same charset as MCP names;
+    // the server rejects unknown names, so no registry lookup is needed here.
+    const agent = optionalAgentName(args.agent)
+
     await requireAuthorizedModel(providerID, modelID)
     await call<void>(
       getClient().session.promptAsync({
@@ -478,7 +457,8 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
         body: {
           model: { providerID, modelID },
           parts,
-          ...(tools ? { tools } : {})
+          ...(tools ? { tools } : {}),
+          ...(agent ? { agent } : {})
         }
       })
     )
@@ -805,6 +785,38 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
     )
   })
 
+  ipcMain.handle('oc:messages:unrevert', async (_event, argsArg: unknown): Promise<Session> => {
+    const args = requireObject(argsArg, 'unrevert args')
+    const directory = requireString(args.directory, 'directory')
+    const sessionID = requireString(args.sessionID, 'sessionID')
+    // The updated session (with `revert` cleared) is returned so the renderer can drop its
+    // reverted-state banner without waiting on the session.updated SSE event.
+    return call<Session>(
+      getClient().session.unrevert({ path: { id: sessionID }, query: { directory } })
+    )
+  })
+
+  ipcMain.handle('oc:agents:list', async (_event, directoryArg: unknown): Promise<Agent[]> => {
+    const directory = requireString(directoryArg, 'directory')
+    return call<Agent[]>(getClient().app.agents({ query: { directory } }))
+  })
+
+  ipcMain.handle(
+    'oc:config:permission:get',
+    (_event, directoryArg: unknown): Promise<PermissionConfig> => {
+      const directory = requireString(directoryArg, 'directory')
+      return getPermissionConfig(getClient(), directory)
+    }
+  )
+
+  ipcMain.handle('oc:config:permission:set', (_event, argsArg: unknown): Promise<boolean> => {
+    const args = requireObject(argsArg, 'permission.set args')
+    const directory = requireString(args.directory, 'directory')
+    // Strictly validated before it can reach opencode.json — unknown keys/values are rejected.
+    const permission = validatePermissionConfig(args.permission)
+    return setPermissionConfig(getClient(), directory, permission, restartServer)
+  })
+
   ipcMain.handle(
     'oc:search:chats',
     async (_event, directoryArg: unknown, queryArg: unknown): Promise<ChatSearchHit[]> => {
@@ -1034,9 +1046,15 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
     deleteImage(requireString(idArg, 'id'))
   )
 
-  ipcMain.handle('oc:live:start', (event): Promise<void> => startGeminiLive(event.sender))
+  ipcMain.handle('oc:live:start', (event, config: unknown): Promise<void> => startGeminiLive(event.sender, config))
   ipcMain.handle('oc:live:stop', (event): void => stopGeminiLive(event.sender.id))
   ipcMain.on('oc:live:send', (event, input: GeminiLiveInput): void => sendGeminiLive(event.sender.id, input))
+  ipcMain.handle('oc:live:saveTranscript', (_event, args: unknown): string => {
+    if (typeof args !== 'object' || args === null || Array.isArray(args)) {
+      throw new Error('saveTranscript args must be an object with a messages array')
+    }
+    return saveLiveTranscript((args as { messages?: unknown }).messages)
+  })
 
   /* ---------------------------------------------------------------- */
   /* Phase 1 — fs / git / terminal / editor deep-link (code surface)   */

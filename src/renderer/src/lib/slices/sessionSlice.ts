@@ -12,6 +12,7 @@ import { isAgentModel } from '../models'
 import { savePrefs } from '../prefs'
 import { classifyError, isTokenThroughputLimit } from '../rotation'
 import { isFreeModel } from '../freeTier'
+import { READONLY_TOOLS } from '../toolPolicies'
 import { saveLedger, record429, recordFailure, reserveAttempt, releaseAttempt, selectModel, DEFAULT_PROVIDER_CAPS, parseModelKey } from '../routing'
 import { sortMessages, sortSessions, upsertSession, makeNotice } from '../collections'
 import { getMatchingCommands } from '../commands'
@@ -30,6 +31,23 @@ import {
 import { rehydrateSessionImages, runImageCommand } from './imagesSlice'
 import type { AppState, SetState, GetState } from './types'
 import type { MessageWithParts, PromptPart } from '../types'
+
+/**
+ * Harness fields for a prompt into `sessionID`: the pinned agent (when any) and the
+ * read-only tool policy (when toggled on). Both are omitted entirely when unset so the
+ * prompt body — and the server's default behaviour — is untouched.
+ */
+function harnessPromptFields(
+  get: GetState,
+  sessionID: string
+): { agent?: string; tools?: Record<string, boolean> } {
+  const agent = get().sessionAgents[sessionID]
+  const readOnly = get().sessionReadOnly[sessionID] === true
+  return {
+    ...(agent ? { agent } : {}),
+    ...(readOnly ? { tools: { ...READONLY_TOOLS } } : {})
+  }
+}
 
 export type SessionSlice = Pick<
   AppState,
@@ -54,6 +72,7 @@ export type SessionSlice = Pick<
   | 'removeQueued'
   | 'retryExchange'
   | 'editAndResend'
+  | 'unrevertSession'
   | 'executeSlashCommand'
   | 'send'
   | 'abort'
@@ -83,13 +102,18 @@ export function createSessionSlice(set: SetState, get: GetState): SessionSlice {
     },
 
     async setDirectory(dir: string): Promise<void> {
+      get().clearSubagents()
       set({
         directory: dir,
         sessions: [],
         activeSessionID: null,
         messages: [],
         permissions: [],
-        busy: false
+        busy: false,
+        // Harness state belongs to the previous directory's sessions.
+        agents: [],
+        sessionAgents: {},
+        sessionReadOnly: {}
       })
       const { providerID, modelID, autoRotate, modelPool, stickyModel } = get()
       savePrefs({ directory: dir, providerID, modelID, autoRotate, theme: get().theme, modelPool, stickyModel })
@@ -113,6 +137,7 @@ export function createSessionSlice(set: SetState, get: GetState): SessionSlice {
       } catch {
         set({ serverCommands: [] })
       }
+      await get().loadAgents(dir)
     },
 
     async newSession(): Promise<void> {
@@ -123,6 +148,8 @@ export function createSessionSlice(set: SetState, get: GetState): SessionSlice {
       }
       try {
         const session = await api().sessions.create(directory)
+        // A fresh session has no children — stale tabs from the previous one must not linger.
+        get().clearSubagents()
         set((state) => ({
           sessions: upsertSession(state.sessions, session),
           activeSessionID: session.id,
@@ -142,6 +169,7 @@ export function createSessionSlice(set: SetState, get: GetState): SessionSlice {
         set({ error: 'Pick a project folder first.' })
         return
       }
+      get().clearSubagents()
       set({ activeSessionID: id, messages: [], permissions: [], busy: false })
 
       try {
@@ -235,7 +263,14 @@ export function createSessionSlice(set: SetState, get: GetState): SessionSlice {
       if (!userText) return
       set({ busy: true, error: null })
       try {
-        await api().prompt({ directory, sessionID: activeSessionID, providerID, modelID, text: userText })
+        await api().prompt({
+          directory,
+          sessionID: activeSessionID,
+          providerID,
+          modelID,
+          text: userText,
+          ...harnessPromptFields(get, activeSessionID)
+        })
       } catch (e) {
         set({ busy: false, error: errText(e) })
       }
@@ -258,6 +293,21 @@ export function createSessionSlice(set: SetState, get: GetState): SessionSlice {
         set({ messages: messages.slice(0, msgIndex) })
         // Reuse send() so routing / rotation / queueing all apply.
         await get().send(newText)
+      } catch (e) {
+        set({ error: errText(e) })
+      }
+    },
+
+    async unrevertSession(): Promise<void> {
+      const { directory, activeSessionID } = get()
+      if (!directory || !activeSessionID) return
+      try {
+        const session = await api().unrevertMessage({ directory, sessionID: activeSessionID })
+        // The response is the session with `revert` cleared — upsert it directly so the
+        // reverted banner does not depend on a session.updated SSE event arriving.
+        if (session) set((state) => ({ sessions: upsertSession(state.sessions, session) }))
+        // The restored messages are back in the server transcript; reload to show them.
+        await get().selectSession(activeSessionID)
       } catch (e) {
         set({ error: errText(e) })
       }
@@ -467,7 +517,15 @@ export function createSessionSlice(set: SetState, get: GetState): SessionSlice {
       set({ busy: true, error: null })
 
       try {
-        await api().prompt({ directory, sessionID, providerID, modelID, text: trimmed, parts })
+        await api().prompt({
+          directory,
+          sessionID,
+          providerID,
+          modelID,
+          text: trimmed,
+          parts,
+          ...harnessPromptFields(get, sessionID)
+        })
       } catch (e) {
         clearActiveAttempt(sessionID)
         const errString = errText(e)

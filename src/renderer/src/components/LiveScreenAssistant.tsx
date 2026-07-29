@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
+import { appendTranscriptChunk, type LiveTranscriptEntry } from '../lib/liveTranscript'
+import { DEFAULT_LIVE_PREFS, LIVE_VOICES, loadLivePrefs, saveLivePrefs, type LivePrefs } from '../lib/prefs'
 import './live-screen.css'
 
-type LiveStatus = 'idle' | 'connecting' | 'live' | 'error'
-type TranscriptEntry = { role: 'you' | 'gemini' | 'system'; text: string }
+type LiveStatus = 'idle' | 'connecting' | 'live' | 'reconnecting' | 'error'
 type ServerMessage = { setupComplete?: object; serverContent?: { interrupted?: boolean; inputTranscription?: { text?: string }; outputTranscription?: { text?: string }; modelTurn?: { parts?: Array<{ text?: string; inlineData?: { data?: string; mimeType?: string } }> } } }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -19,43 +20,57 @@ function base64ToInt16(value: string): Int16Array {
   return new Int16Array(bytes.buffer)
 }
 
-function pcm16FromFloat32(input: Float32Array, sourceRate: number): Uint8Array {
-  const ratio = sourceRate / 16_000
-  const output = new Int16Array(Math.max(1, Math.floor(input.length / ratio)))
-  for (let index = 0; index < output.length; index += 1) {
-    const start = Math.floor(index * ratio)
-    const end = Math.min(input.length, Math.floor((index + 1) * ratio))
-    let sum = 0
-    for (let sourceIndex = start; sourceIndex < end; sourceIndex += 1) sum += input[sourceIndex]
-    const sample = Math.max(-1, Math.min(1, sum / Math.max(1, end - start)))
-    output[index] = sample < 0 ? sample * 0x8000 : sample * 0x7fff
-  }
-  return new Uint8Array(output.buffer)
-}
-
 export function LiveScreenAssistant({ onClose }: { onClose: () => void }): JSX.Element {
   const [status, setStatus] = useState<LiveStatus>('idle')
-  const [transcript, setTranscript] = useState<TranscriptEntry[]>([])
+  const [transcript, setTranscript] = useState<LiveTranscriptEntry[]>([])
   const [prompt, setPrompt] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [muted, setMuted] = useState(false)
+  const [settings, setSettings] = useState<LivePrefs>(() => loadLivePrefs())
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const statusRef = useRef<LiveStatus>('idle')
+  const transcriptRef = useRef<LiveTranscriptEntry[]>([])
+  const nextEntryId = useRef(0)
+  const mutedRef = useRef(false)
   const unsubscribeLive = useRef<(() => void) | null>(null)
   const screenStream = useRef<MediaStream | null>(null)
   const micStream = useRef<MediaStream | null>(null)
   const frameTimer = useRef<number | null>(null)
   const canvas = useRef<HTMLCanvasElement | null>(null)
   const audioContext = useRef<AudioContext | null>(null)
-  const audioProcessor = useRef<ScriptProcessorNode | null>(null)
+  const micWorklet = useRef<AudioWorkletNode | null>(null)
   const audioSources = useRef(new Set<AudioBufferSourceNode>())
   const nextAudioTime = useRef(0)
   const closing = useRef(false)
+  const savingTranscript = useRef(false)
 
-  const addTranscript = (role: TranscriptEntry['role'], text: string): void => {
+  // Ref-mirrored status: the IPC callback is registered once per connect and
+  // must read the CURRENT status, not a stale closure.
+  const changeStatus = (next: LiveStatus): void => {
+    statusRef.current = next
+    setStatus(next)
+  }
+
+  const addTranscript = (role: LiveTranscriptEntry['role'], text: string): void => {
     if (!text.trim()) return
-    setTranscript((items) => {
-      const previous = items.at(-1)
-      return previous?.role === role && role !== 'system'
-        ? [...items.slice(0, -1), { role, text: `${previous.text}${text}` }]
-        : [...items, { role, text }]
+    nextEntryId.current += 1
+    transcriptRef.current = appendTranscriptChunk(transcriptRef.current, { id: nextEntryId.current, role, text, at: Date.now() })
+    setTranscript(transcriptRef.current)
+  }
+
+  const updateSettings = (patch: Partial<LivePrefs>): void => {
+    setSettings((current) => {
+      const next = { ...current, ...patch }
+      saveLivePrefs(next)
+      return next
+    })
+  }
+
+  const toggleMuted = (): void => {
+    setMuted((current) => {
+      mutedRef.current = !current
+      return !current
     })
   }
 
@@ -63,8 +78,11 @@ export function LiveScreenAssistant({ onClose }: { onClose: () => void }): JSX.E
     closing.current = true
     if (frameTimer.current !== null) window.clearInterval(frameTimer.current)
     frameTimer.current = null
-    audioProcessor.current?.disconnect()
-    audioProcessor.current = null
+    if (micWorklet.current) {
+      micWorklet.current.port.onmessage = null
+      micWorklet.current.disconnect()
+      micWorklet.current = null
+    }
     micStream.current?.getTracks().forEach((track) => track.stop())
     screenStream.current?.getTracks().forEach((track) => track.stop())
     micStream.current = null
@@ -77,9 +95,10 @@ export function LiveScreenAssistant({ onClose }: { onClose: () => void }): JSX.E
     unsubscribeLive.current = null
     void window.api.live.stop()
     nextAudioTime.current = 0
-    setStatus('idle')
+    changeStatus('idle')
   }
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- unmount-only cleanup; stop reads refs, not state
   useEffect(() => () => stop(), [])
 
   const playAudio = (data: string): void => {
@@ -106,18 +125,25 @@ export function LiveScreenAssistant({ onClose }: { onClose: () => void }): JSX.E
       const context = audioContext.current ?? new AudioContext()
       audioContext.current = context
       await context.resume()
+      // Same-origin static asset from public/ — a blob: module URL would violate
+      // the production CSP (script-src 'self', no worker-src override).
+      await context.audioWorklet.addModule(`${import.meta.env.BASE_URL}live-mic-worklet.js`)
       const source = context.createMediaStreamSource(media)
-      const processor = context.createScriptProcessor(4096, 1, 1)
-      const mutedOutput = context.createGain()
-      mutedOutput.gain.value = 0
-      processor.onaudioprocess = (event) => {
-        const data = bytesToBase64(pcm16FromFloat32(event.inputBuffer.getChannelData(0), context.sampleRate))
+      const worklet = new AudioWorkletNode(context, 'live-mic-capture')
+      worklet.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+        // Muted/closing chunks are dropped renderer-side; screen frames and text keep flowing.
+        if (mutedRef.current || closing.current) return
+        const data = bytesToBase64(new Uint8Array(event.data))
         window.api.live.send({ audio: { data, mimeType: 'audio/pcm;rate=16000' } })
       }
-      source.connect(processor)
-      processor.connect(mutedOutput)
+      // Zero-gain keepalive: the graph must reach the destination to be pulled,
+      // but the mic must not monitor through the speakers.
+      const mutedOutput = context.createGain()
+      mutedOutput.gain.value = 0
+      source.connect(worklet)
+      worklet.connect(mutedOutput)
       mutedOutput.connect(context.destination)
-      audioProcessor.current = processor
+      micWorklet.current = worklet
     } catch {
       addTranscript('system', 'Microphone unavailable — screen and typed questions are still live.')
     }
@@ -143,9 +169,12 @@ export function LiveScreenAssistant({ onClose }: { onClose: () => void }): JSX.E
   }
 
   const connect = async (): Promise<void> => {
+    if (savingTranscript.current) return
     closing.current = false
     setError(null)
-    setStatus('connecting')
+    setNotice(null)
+    changeStatus('connecting')
+    transcriptRef.current = []
     setTranscript([])
     try {
       const media = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 5 }, audio: false })
@@ -155,11 +184,30 @@ export function LiveScreenAssistant({ onClose }: { onClose: () => void }): JSX.E
       audioContext.current = context
       await context.resume()
       unsubscribeLive.current = window.api.live.onMessage((event) => {
-        if (event.type === 'error') { setError(event.message); setStatus('error'); return }
-        if (event.type === 'closed') {
-          if (!closing.current) { setError(event.reason || `Gemini Live closed unexpectedly (code ${event.code}).`); setStatus('error') }
+        if (event.type === 'error') {
+          setError(event.message)
+          // Once live, errors are transient (dropped chunks, send failures) —
+          // don't tear the session UI down for them.
+          if (statusRef.current !== 'live' && statusRef.current !== 'reconnecting') changeStatus('error')
           return
         }
+        if (event.type === 'reconnecting') {
+          changeStatus('reconnecting')
+          addTranscript('system', `Connection lost — reconnecting (${event.attempt}/${event.maxAttempts})…`)
+          return
+        }
+        if (event.type === 'closed') {
+          if (!closing.current) {
+            setError(event.reason || `Gemini Live closed unexpectedly (code ${event.code}).`)
+            changeStatus('error')
+          }
+          return
+        }
+        if (statusRef.current === 'reconnecting') {
+          changeStatus('live')
+          addTranscript('system', 'Reconnected.')
+        }
+        if (statusRef.current === 'live') setError(null)
         const data = event.data as ServerMessage
         const content = data.serverContent
         if (!content) return
@@ -175,15 +223,38 @@ export function LiveScreenAssistant({ onClose }: { onClose: () => void }): JSX.E
           if (part.inlineData?.data && part.inlineData.mimeType?.startsWith('audio/pcm')) playAudio(part.inlineData.data)
         }
       })
-      await window.api.live.start()
-      setStatus('live')
+      await window.api.live.start({
+        voice: settings.voice,
+        model: settings.model,
+        systemInstruction: settings.systemInstruction
+      })
+      changeStatus('live')
       addTranscript('system', 'Connected. Speak naturally or type a question.')
       startFrames(media)
       void startMicrophone()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Screen sharing was cancelled.')
-      setStatus('error')
+      changeStatus('error')
     }
+  }
+
+  const close = (): void => {
+    if (savingTranscript.current) return
+    const entries = transcriptRef.current.filter((entry) => entry.role !== 'system')
+    stop()
+    if (entries.length === 0) {
+      onClose()
+      return
+    }
+    // Auto-save the conversation, show where it landed, then unmount.
+    savingTranscript.current = true
+    setNotice('Saving transcript…')
+    window.api.live.saveTranscript({ messages: entries }).then(
+      (path) => setNotice(`Transcript saved to ${path}`),
+      () => setNotice('Transcript could not be saved.')
+    ).finally(() => {
+      window.setTimeout(onClose, 1500)
+    })
   }
 
   const sendPrompt = (): void => {
@@ -194,9 +265,17 @@ export function LiveScreenAssistant({ onClose }: { onClose: () => void }): JSX.E
     setPrompt('')
   }
 
+  const busy = status === 'live' || status === 'connecting' || status === 'reconnecting'
+
   return <div className="live-screen" role="dialog" aria-modal="true">
-    <div className="live-screen__head"><div><span className="live-screen__eyebrow">GEMINI 3.1 FLASH LIVE</span><h1>Screen copilot</h1><p>Share a window, speak naturally, and get live visual help.</p></div><button className="live-screen__close" onClick={() => { stop(); onClose() }}>Close</button></div>
-    <div className="live-screen__body"><div className="live-screen__preview"><canvas ref={canvas} /><div className="live-screen__preview-label"><span className={`live-screen__dot live-screen__dot--${status}`} />{status === 'live' ? 'Screen + microphone live' : status === 'connecting' ? 'Connecting…' : 'Screen preview'}</div></div><div className="live-screen__conversation"><div className="live-screen__messages" aria-live="polite">{transcript.length ? transcript.map((entry, index) => <p className={`live-screen__message live-screen__message--${entry.role}`} key={`${index}-${entry.text.slice(0, 10)}`}><strong>{entry.role === 'gemini' ? 'Gemini' : entry.role === 'you' ? 'You' : 'Status'}</strong>{entry.text}</p>) : <p className="live-screen__muted">Your visual conversation will appear here.</p>}</div><div className="live-screen__controls"><input value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') sendPrompt() }} placeholder="Ask about the screen…" disabled={status !== 'live'} /><button onClick={sendPrompt} disabled={status !== 'live'}>Send</button></div></div></div>
-    <div className="live-screen__foot"><span className="live-screen__provider">Uses the encrypted Google key from Providers</span><button className="live-screen__start" onClick={status === 'live' || status === 'connecting' ? stop : () => void connect()}>{status === 'live' ? 'Stop sharing' : status === 'connecting' ? 'Cancel' : 'Start screen share'}</button>{error && <span className="live-screen__error">{error}</span>}</div>
+    <div className="live-screen__head"><div><span className="live-screen__eyebrow">{settings.model.toUpperCase()} LIVE</span><h1>Screen copilot</h1><p>Share a window, speak naturally, and get live visual help.</p></div><div className="live-screen__head-actions"><button className="live-screen__close" onClick={() => setSettingsOpen((open) => !open)} aria-expanded={settingsOpen}>Settings</button><button className="live-screen__close" onClick={close}>Close</button></div></div>
+    {settingsOpen && <div className="live-screen__settings">
+      <label className="live-screen__field">Voice<select value={settings.voice} onChange={(event) => updateSettings({ voice: event.target.value })}>{LIVE_VOICES.map((voice) => <option key={voice} value={voice}>{voice}</option>)}</select></label>
+      <label className="live-screen__field">Model<input value={settings.model} onChange={(event) => updateSettings({ model: event.target.value })} placeholder={DEFAULT_LIVE_PREFS.model} spellCheck={false} /></label>
+      <label className="live-screen__field live-screen__field--wide">System prompt<textarea value={settings.systemInstruction} onChange={(event) => updateSettings({ systemInstruction: event.target.value })} rows={3} /></label>
+      <p className="live-screen__settings-note">Applied on connect — changes mid-session take effect after a stop and restart.</p>
+    </div>}
+    <div className="live-screen__body"><div className="live-screen__preview"><canvas ref={canvas} /><div className="live-screen__preview-label"><span className={`live-screen__dot live-screen__dot--${status}`} />{status === 'live' ? (muted ? 'Screen live — mic muted' : 'Screen + microphone live') : status === 'reconnecting' ? 'Reconnecting…' : status === 'connecting' ? 'Connecting…' : 'Screen preview'}</div></div><div className="live-screen__conversation"><div className="live-screen__messages" aria-live="polite">{transcript.length ? transcript.map((entry) => <p className={`live-screen__message live-screen__message--${entry.role}`} key={entry.id}><strong>{entry.role === 'gemini' ? 'Gemini' : entry.role === 'you' ? 'You' : 'Status'}</strong>{entry.text}</p>) : <p className="live-screen__muted">Your visual conversation will appear here.</p>}</div><div className="live-screen__controls"><button className={`live-screen__mute${muted ? ' live-screen__mute--on' : ''}`} onClick={toggleMuted} aria-pressed={muted} disabled={status !== 'live'} title={muted ? 'Unmute microphone' : 'Mute microphone'}>{muted ? 'Unmute' : 'Mute'}</button><input value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') sendPrompt() }} placeholder="Ask about the screen…" disabled={status !== 'live'} /><button onClick={sendPrompt} disabled={status !== 'live'}>Send</button></div></div></div>
+    <div className="live-screen__foot"><span className="live-screen__provider">Uses the encrypted Google key from Providers</span><button className="live-screen__start" onClick={busy ? stop : () => void connect()}>{status === 'live' || status === 'reconnecting' ? 'Stop sharing' : status === 'connecting' ? 'Cancel' : 'Start screen share'}</button>{error && <span className="live-screen__error">{error}</span>}{notice && <span className="live-screen__notice">{notice}</span>}</div>
   </div>
 }

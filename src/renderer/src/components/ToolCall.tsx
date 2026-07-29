@@ -7,6 +7,7 @@ import { findFileRefs } from '../lib/filelinks'
 import { useStore } from '../lib/store'
 import { store } from '../lib/slices/storeRef'
 import { errText } from '../lib/slices/api'
+import { taskChildSessionId } from '../lib/subagents'
 
 /* ------------------------------------------------------------------ *
  * Defensive narrowing. `input` is Record<string, unknown> — never cast.
@@ -470,6 +471,25 @@ function ToolBody({ part, directory }: { part: ToolPart; directory: string }): R
       if (description) sections.push(<Labelled key="desc" label="Task" value={description} />)
       if (agent) sections.push(<Labelled key="agent" label="Agent" value={agent} />)
       if (prompt) sections.push(<Clamp key="prompt" text={prompt} directory={directory} />)
+      // The server hands the child session id back in the tool call's metadata from the
+      // running state onward — offer a drill-down into that subagent's live transcript.
+      const childSessionId = taskChildSessionId(part)
+      if (childSessionId !== undefined) {
+        sections.push(
+          <button
+            key="subagent"
+            type="button"
+            className="tool__subagent"
+            title="Open this subagent's transcript in a chat tab"
+            onClick={(event) => {
+              event.stopPropagation()
+              void store().getState().openSubagentTab(childSessionId)
+            }}
+          >
+            View subagent ↗
+          </button>
+        )
+      }
       break
     }
 

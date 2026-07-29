@@ -10,7 +10,8 @@
  * ever touches state through the shared `set`/`get` and the attempt-machine accessors.
  *
  * The one deliberate exception is compare traffic, which is consumed by `applyCompareEvent`
- * before the switch is reached — see the note there.
+ * before the switch is reached — see the note there. Subagent (Task-tool child session)
+ * traffic gets the same treatment from `applySubagentEvent`, invoked right beside it.
  */
 
 import { classifyError, isTokenThroughputLimit } from '../rotation'
@@ -27,6 +28,8 @@ import {
 } from '../collections'
 import { api } from './api'
 import { applyCompareEvent } from './compareSlice'
+import { applySubagentEvent } from './subagentSlice'
+import { isSelfOrDescendant } from '../subagents'
 import {
   armStallWatchdog,
   beginFailover,
@@ -57,18 +60,7 @@ function isActiveOrDescendant(
   state: Pick<AppState, 'activeSessionID' | 'sessions'>,
   sessionID: string | undefined | null
 ): boolean {
-  const active = state.activeSessionID
-  if (!sessionID || !active) return false
-  if (sessionID === active) return true
-  const byId = new Map(state.sessions.map((s) => [s.id, s]))
-  let current = byId.get(sessionID)
-  let guard = 0
-  while (current?.parentID && guard < 32) {
-    if (current.parentID === active) return true
-    current = byId.get(current.parentID)
-    guard += 1
-  }
-  return false
+  return isSelfOrDescendant(state.sessions, state.activeSessionID, sessionID)
 }
 
 export function createEventSlice(set: SetState, get: GetState): EventSlice {
@@ -81,6 +73,12 @@ export function createEventSlice(set: SetState, get: GetState): EventSlice {
       // Compare-run traffic is handled entirely separately and returns before the switch below, so it
       // can never reach the single-slot attempt machine, the routing ledger, or beginFailover.
       if (applyCompareEvent(e, set, get)) return
+
+      // Subagent (Task-tool child session) traffic gets the same isolation: per-child
+      // transcripts/busy/error live in the subagent slice. session.created/.deleted are only
+      // OBSERVED there and still fall through to the switch — the sessions list stays the
+      // parentID authority.
+      if (applySubagentEvent(e, set, get)) return
 
       switch (e.type) {
         case 'message.updated': {

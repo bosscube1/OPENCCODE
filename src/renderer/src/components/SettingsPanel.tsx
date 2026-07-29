@@ -1,13 +1,183 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { JSX } from 'react'
-import type { UpdateStatus } from '../lib/types'
-import { useStore } from '../lib/store'
+import type { NanoUsage, PermissionConfig, UpdateStatus } from '../lib/types'
+import { useStore, errText } from '../lib/store'
 import { FREE_ROUTING_CANDIDATES } from '../lib/rotation'
+import { formatTokens, relativeTime } from '../lib/format'
+import { PERMISSION_PRESETS, summarizePermission, type PermissionPreset } from '../lib/permissionPresets'
 import { McpPanel } from './McpPanel'
 import { RoutingPanel } from './RoutingPanel'
 
 /** Listened for by ProviderPanel (mounted separately, in Sidebar) to open itself. */
 const OPEN_PROVIDERS_EVENT = 'providers:open'
+
+/** NanoGPT usage reset timestamps arrive as epoch — seconds or ms depending on the endpoint. */
+function toEpochMs(epoch: number): number {
+  return epoch < 1e12 ? epoch * 1000 : epoch
+}
+
+/** Subscription quota readout. Fetches once on mount and on manual refresh — never polled. */
+function NanoUsageCard(): JSX.Element {
+  const [usage, setUsage] = useState<NanoUsage | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback((): void => {
+    setLoading(true)
+    setError(null)
+    window.api.nanogpt
+      .usage()
+      .then((result) => setUsage(result))
+      .catch((e: unknown) => {
+        setUsage(null)
+        setError(errText(e))
+      })
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const noKey = error !== null && error.includes('No NanoGPT API key')
+
+  const bucket = (label: string, b: NanoUsage['daily']): JSX.Element => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+      <span style={{ fontSize: '12px', fontWeight: 600 }}>{label}</span>
+      <span style={{ fontSize: '12px' }}>
+        {formatTokens(b.used)} used · {formatTokens(b.remaining)} left · {Math.round(b.percentUsed)}%
+      </span>
+      <span style={{ fontSize: '11px', color: 'var(--fg-dim)' }}>resets {relativeTime(toEpochMs(b.resetAt))}</span>
+    </div>
+  )
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+        <span className="providers__name" style={{ fontSize: '12px' }}>Subscription quota</span>
+        <button
+          type="button"
+          className="providers__key-btn"
+          disabled={loading}
+          onClick={load}
+        >
+          {loading ? 'Loading…' : 'Refresh'}
+        </button>
+      </div>
+      {loading && usage === null ? (
+        <p style={{ fontSize: '12px', color: 'var(--fg-dim)', margin: 0 }}>Loading usage…</p>
+      ) : noKey ? (
+        <p style={{ fontSize: '12px', color: 'var(--fg-dim)', margin: 0 }}>
+          Add a NanoGPT key under Provider Keys to see usage.
+        </p>
+      ) : error !== null ? (
+        <p role="alert" style={{ fontSize: '12px', color: 'var(--danger)', margin: 0 }}>{error}</p>
+      ) : usage !== null ? (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+          {bucket('Daily', usage.daily)}
+          {bucket('Monthly', usage.monthly)}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/** Project permission presets — edits the `permission` key of the project's opencode.json. */
+function PermissionsCard(): JSX.Element {
+  const directory = useStore((s) => s.directory)
+  const [current, setCurrent] = useState<PermissionConfig | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [applying, setApplying] = useState<string | null>(null)
+  const [note, setNote] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback((): void => {
+    if (!directory) return
+    setLoading(true)
+    window.api.config
+      .getPermission(directory)
+      .then((permission) => {
+        setCurrent(permission)
+        setError(null)
+      })
+      .catch((e: unknown) => setError(errText(e)))
+      .finally(() => setLoading(false))
+  }, [directory])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const apply = (preset: PermissionPreset): void => {
+    if (!directory || applying !== null) return
+    setApplying(preset.id)
+    setNote(null)
+    setError(null)
+    window.api.config
+      .setPermission({ directory, permission: preset.permission })
+      .then((restarted) => {
+        setNote(
+          restarted
+            ? 'Saved to opencode.json — the server is restarting to pick it up.'
+            : `"${preset.label}" applied.`
+        )
+        load()
+      })
+      .catch((e: unknown) => setError(errText(e)))
+      .finally(() => setApplying(null))
+  }
+
+  if (!directory) {
+    return (
+      <p style={{ fontSize: '12px', color: 'var(--fg-dim)', margin: 0 }}>
+        Open a project folder to edit its permission config.
+      </p>
+    )
+  }
+
+  return (
+    <div>
+      <p style={{ fontSize: '11.5px', color: 'var(--fg-dim)', marginTop: 0, marginBottom: '8px' }}>
+        Writes the <code>permission</code> key of this project&apos;s <code>opencode.json</code>.
+      </p>
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
+        {PERMISSION_PRESETS.map((preset) => (
+          <button
+            key={preset.id}
+            type="button"
+            className="providers__key-btn"
+            disabled={applying !== null}
+            title={preset.description}
+            onClick={() => apply(preset)}
+            style={{ flex: 1 }}
+          >
+            {applying === preset.id ? 'Applying…' : preset.label}
+          </button>
+        ))}
+      </div>
+      <div style={{ fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+        <span style={{ fontWeight: 600, fontSize: '11.5px' }}>
+          Current effective values{loading ? ' (refreshing…)' : ''}
+        </span>
+        {current === null && !loading && error === null ? (
+          <span style={{ color: 'var(--fg-dim)' }}>Not loaded yet.</span>
+        ) : (
+          summarizePermission(current).map(({ key, value }) => (
+            <span key={key} style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--fg-dim)' }}>
+              {key}: <span style={{ color: 'var(--fg)' }}>{value}</span>
+            </span>
+          ))
+        )}
+      </div>
+      {note !== null && (
+        <p role="status" style={{ fontSize: '11.5px', color: 'var(--ok)', marginBottom: 0 }}>{note}</p>
+      )}
+      {error !== null && (
+        <p role="alert" style={{ fontSize: '11.5px', color: 'var(--danger)', marginBottom: 0 }}>{error}</p>
+      )}
+    </div>
+  )
+}
 
 function updateStatusText(status: UpdateStatus): string {
   switch (status.state) {
@@ -141,6 +311,13 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
                 pay-as-you-go balance is refused from then on. The first generation on an
                 untested model is what reveals it.
               </p>
+            </div>
+          </section>
+
+          <section>
+            <h2 className="providers__group-title">NanoGPT Usage</h2>
+            <div className="providers__card">
+              <NanoUsageCard />
             </div>
           </section>
 
@@ -376,6 +553,13 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
             <h2 className="providers__group-title">MCP Connectors</h2>
             <div className="providers__card">
               <McpPanel />
+            </div>
+          </section>
+
+          <section>
+            <h2 className="providers__group-title">Permissions</h2>
+            <div className="providers__card">
+              <PermissionsCard />
             </div>
           </section>
 

@@ -151,3 +151,60 @@ export function savePrefs(prefs: Omit<Prefs, 'routingMode' | 'showPaidModels' | 
 function isRoutingMode(v: string): v is RoutingMode {
   return v === 'locked' || v === 'failover' || v === 'auto'
 }
+
+/* --- Gemini Live screen-copilot prefs ---------------------------------------
+ * Separate key from PREFS_KEY: the live session settings change independently
+ * of chat routing, and this keeps the Prefs migration machinery untouched. */
+
+const LIVE_PREFS_KEY = 'opencode-desktop:live-prefs'
+
+/** Keep in sync with GEMINI_LIVE_VOICES in src/main/geminiLiveConfig.ts (main enforces this list). */
+export const LIVE_VOICES = [
+  'Zephyr', 'Puck', 'Charon', 'Kore', 'Fenrir', 'Leda', 'Orus', 'Aoede',
+  'Callirrhoe', 'Autonoe', 'Enceladus', 'Iapetus', 'Umbriel', 'Algieba',
+  'Despina', 'Erinome', 'Algenib', 'Rasalgethi', 'Laomedeia', 'Achernar',
+  'Alnilam', 'Schedar', 'Gacrux', 'Pulcherrima', 'Achird', 'Zubenelgenubi',
+  'Vindemiatrix', 'Sadachbia', 'Sadaltager', 'Sulafat'
+] as const
+
+export type LivePrefs = {
+  voice: string
+  model: string
+  systemInstruction: string
+}
+
+/** Mirrors DEFAULT_GEMINI_LIVE_CONFIG in src/main/geminiLiveConfig.ts. */
+export const DEFAULT_LIVE_PREFS: LivePrefs = {
+  voice: 'Kore',
+  model: 'gemini-3.1-flash-live-preview',
+  systemInstruction:
+    'You are a concise visual copilot. Watch the shared screen, answer spoken or typed questions, ' +
+    'and proactively mention important visible changes. Never claim to click or change the screen.'
+}
+
+export function loadLivePrefs(): LivePrefs {
+  try {
+    const raw = window.localStorage.getItem(LIVE_PREFS_KEY)
+    if (!raw) return { ...DEFAULT_LIVE_PREFS }
+    const parsed = JSON.parse(raw) as Partial<Record<keyof LivePrefs, unknown>>
+    return {
+      voice:
+        typeof parsed.voice === 'string' && (LIVE_VOICES as readonly string[]).includes(parsed.voice)
+          ? parsed.voice
+          : DEFAULT_LIVE_PREFS.voice,
+      model: typeof parsed.model === 'string' && parsed.model ? parsed.model : DEFAULT_LIVE_PREFS.model,
+      systemInstruction:
+        typeof parsed.systemInstruction === 'string' ? parsed.systemInstruction : DEFAULT_LIVE_PREFS.systemInstruction
+    }
+  } catch {
+    return { ...DEFAULT_LIVE_PREFS }
+  }
+}
+
+export function saveLivePrefs(prefs: LivePrefs): void {
+  try {
+    window.localStorage.setItem(LIVE_PREFS_KEY, JSON.stringify(prefs))
+  } catch {
+    // Storage can be unavailable or full; preferences are best-effort.
+  }
+}
