@@ -7,6 +7,8 @@ import { getCrashLogPath } from './crashlog'
 export type ApplicationMenuActions = {
   onCheckForUpdates?: () => void
   onQuit?: () => void
+  onLiveScreen?: () => void
+  onQuickEntry?: () => void
 }
 
 export function setupApplicationMenu(actions: ApplicationMenuActions = {}): void {
@@ -78,6 +80,22 @@ export function setupApplicationMenu(actions: ApplicationMenuActions = {}): void
         { role: 'zoomOut' as const },
         { type: 'separator' as const },
         { role: 'togglefullscreen' as const }
+      ]
+    },
+    {
+      label: 'Tools',
+      submenu: [
+        {
+          label: 'Gemini Live',
+          accelerator: 'CmdOrCtrl+Shift+L',
+          enabled: Boolean(actions.onLiveScreen),
+          click: actions.onLiveScreen
+        },
+        {
+          label: 'Quick Entry',
+          enabled: Boolean(actions.onQuickEntry),
+          click: actions.onQuickEntry
+        }
       ]
     },
     {

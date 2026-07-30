@@ -4,7 +4,7 @@
  * Validation and formatting are pure and exported for tests; only
  * `saveLiveTranscript` touches Electron/fs.
  */
-import { app } from 'electron'
+import { app, shell } from 'electron'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -54,13 +54,25 @@ export function formatTranscriptMarkdown(messages: LiveTranscriptMessage[], now:
   return lines.join('\n')
 }
 
+/** Absolute path to `userData/live-transcripts`, derived in main — not renderer-suppliable. */
+function transcriptsDir(): string {
+  return join(app.getPath('userData'), 'live-transcripts')
+}
+
 /** Write the transcript to disk and return the saved file path. */
 export function saveLiveTranscript(input: unknown): string {
   const messages = validateTranscriptMessages(input)
-  const dir = join(app.getPath('userData'), 'live-transcripts')
+  const dir = transcriptsDir()
   mkdirSync(dir, { recursive: true })
   // `:` and `.` are illegal/noisy in Windows filenames.
   const filePath = join(dir, `${new Date().toISOString().replace(/[:.]/g, '-')}.md`)
   writeFileSync(filePath, formatTranscriptMarkdown(messages), 'utf8')
   return filePath
+}
+
+/** Opens the transcripts folder in the OS file manager, creating it if absent. */
+export function revealTranscriptsFolder(): void {
+  const dir = transcriptsDir()
+  mkdirSync(dir, { recursive: true })
+  void shell.openPath(dir)
 }

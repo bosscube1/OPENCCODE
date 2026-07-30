@@ -127,20 +127,24 @@ export function loadPrefs(): Prefs {
  * fields are filled from the currently persisted values so callers that
  * haven't been updated yet don't clobber routingMode/showPaidModels.
  */
-export function savePrefs(prefs: Omit<Prefs, 'routingMode' | 'showPaidModels' | 'compareTargets'> & Partial<Pick<Prefs, 'routingMode' | 'showPaidModels' | 'compareTargets'>>): void {
+export function savePrefs(
+  prefs: Omit<Prefs, 'routingMode' | 'showPaidModels' | 'compareTargets' | 'autoRotate' | 'stickyModel'> &
+    Partial<Pick<Prefs, 'routingMode' | 'showPaidModels' | 'compareTargets'>>
+): void {
   try {
     const current = loadPrefs()
-    const merged: Prefs = {
+    const routingMode = prefs.routingMode ?? current.routingMode
+    // `autoRotate`/`stickyModel` are DERIVED, never accepted from callers — passing them was
+    // the original defect: the store held its own copy, savePrefs silently overwrote it, and
+    // no failover gate ever read either one. They are still written so a one-release
+    // downgrade can migrate back out of `routingMode`.
+    const toWrite: Prefs = {
       ...prefs,
-      routingMode: prefs.routingMode ?? current.routingMode,
+      routingMode,
       showPaidModels: prefs.showPaidModels ?? current.showPaidModels,
       compareTargets: prefs.compareTargets ?? current.compareTargets,
-    }
-    // Write both new and legacy keys for one-release downgrade safety
-    const toWrite = {
-      ...merged,
-      autoRotate: merged.routingMode === 'auto',
-      stickyModel: merged.routingMode === 'failover',
+      autoRotate: routingMode === 'auto',
+      stickyModel: routingMode === 'failover',
     }
     window.localStorage.setItem(PREFS_KEY, JSON.stringify(toWrite))
   } catch {

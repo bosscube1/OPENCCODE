@@ -1,0 +1,113 @@
+/* ==========================================================================
+   tips.css — onboarding tip bar
+   Namespace: .tip-bar
+   ========================================================================== */
+
+.tip-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  background: var(--bg-alt);
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--fg);
+}
+
+.tip-bar__text {
+  display: flex;
+  align-items: baseline;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tip-bar__title {
+  font-weight: 600;
+  color: var(--fg);
+  flex: 0 0 auto;
+}
+
+.tip-bar__body {
+  color: var(--fg-dim);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tip-bar__kbd {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg-dim);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+.tip-bar__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+
+.tip-bar__count {
+  color: var(--fg-dim);
+  font-size: 11px;
+  white-space: nowrap;
+  margin-right: 2px;
+}
+
+.tip-bar__btn {
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--fg);
+  font-size: 11.5px;
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tip-bar__btn:hover {
+  background: var(--hover);
+}
+
+.tip-bar__close {
+  border: none;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: var(--radius);
+}
+
+.tip-bar__close:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+@media (max-width: 620px) {
+  .tip-bar {
+    align-items: flex-start;
+  }
+
+  .tip-bar__text {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+
+  .tip-bar__actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}

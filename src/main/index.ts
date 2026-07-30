@@ -1,16 +1,19 @@
 /**
  * Electron app lifecycle: window creation, OpenCode server supervision, event fan-out.
  */
-import { app, BrowserWindow, desktopCapturer, dialog, screen, session } from 'electron'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { app, BrowserWindow, desktopCapturer, dialog, session } from 'electron'
+import { existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { initCrashLog, logCrash } from './crashlog'
+import { isTrustedRendererUrl } from './trustedUrl'
+import { createBoundsStore } from './windowBounds'
 import { stopAllGeminiLive } from './geminiLive'
 import { registerIpc, unregisterIpc } from './ipc'
 import { setupApplicationMenu } from './menu'
 import { createAppSettingsController, type AppSettingsController } from './appSettings'
 import { setupQuickEntry, type QuickEntryController } from './quickEntry'
+import { setupLiveWindow, type LiveWindowController } from './liveWindow'
 import { setupTray, type TrayController } from './tray'
 import { checkForUpdates, cleanupUpdater, setupUpdater, type UpdateStatus } from './updater'
 import { getStatus, onEvent, onStatus, startServer, stopServer, type ServerStatus } from './server'
@@ -23,6 +26,7 @@ let shuttingDown = false
 let quitRequested = false
 let appSettings: AppSettingsController | null = null
 let quickEntry: QuickEntryController | null = null
+let liveWindow: LiveWindowController | null = null
 let tray: TrayController | null = null
 const rendererReady = new WeakSet<BrowserWindow>()
 const pendingQuickPrompts: string[] = []
@@ -32,88 +36,16 @@ let lastUpdateStatus: UpdateStatus = { state: 'idle' }
 /* window bounds persistence                                           */
 /* ------------------------------------------------------------------ */
 
-type WindowBounds = {
-  x: number
-  y: number
-  width: number
-  height: number
-  maximized: boolean
-}
+const MIN_WIDTH = 780
+const MIN_HEIGHT = 500
 
-const DEFAULT_BOUNDS: WindowBounds = {
-  x: -1,
-  y: -1,
-  width: 1200,
-  height: 800,
-  maximized: false
-}
-
-function boundsPath(): string {
-  return join(app.getPath('userData'), 'window-state.json')
-}
-
-function loadBounds(): WindowBounds {
-  try {
-    const raw = readFileSync(boundsPath(), 'utf8')
-    const parsed = JSON.parse(raw) as Partial<WindowBounds>
-    return {
-      x: typeof parsed.x === 'number' ? parsed.x : DEFAULT_BOUNDS.x,
-      y: typeof parsed.y === 'number' ? parsed.y : DEFAULT_BOUNDS.y,
-      width: typeof parsed.width === 'number' ? Math.max(780, parsed.width) : DEFAULT_BOUNDS.width,
-      height: typeof parsed.height === 'number' ? Math.max(500, parsed.height) : DEFAULT_BOUNDS.height,
-      maximized: typeof parsed.maximized === 'boolean' ? parsed.maximized : false
-    }
-  } catch {
-    return { ...DEFAULT_BOUNDS }
-  }
-}
-
-function saveBounds(bounds: WindowBounds): void {
-  try {
-    const dir = app.getPath('userData')
-    mkdirSync(dir, { recursive: true })
-    writeFileSync(boundsPath(), JSON.stringify(bounds), 'utf8')
-  } catch {
-    /* best-effort persistence */
-  }
-}
-
-/** Validate that the saved position is visible on at least one connected display. */
-function validateBounds(bounds: WindowBounds): WindowBounds {
-  if (bounds.x === -1 && bounds.y === -1) return bounds // use default placement
-  const displays = screen.getAllDisplays()
-  const visible = displays.some((display) => {
-    const { x, y, width, height } = display.bounds
-    // At least 100px of the window should be visible on this display
-    return (
-      bounds.x < x + width - 100 &&
-      bounds.x + bounds.width > x + 100 &&
-      bounds.y < y + height - 100 &&
-      bounds.y + bounds.height > y + 100
-    )
-  })
-  return visible ? bounds : { ...bounds, x: -1, y: -1 }
-}
-
-let saveBoundsTimer: ReturnType<typeof setTimeout> | null = null
-
-function debouncedSaveBounds(win: BrowserWindow): void {
-  if (saveBoundsTimer !== null) clearTimeout(saveBoundsTimer)
-  saveBoundsTimer = setTimeout(() => {
-    saveBoundsTimer = null
-    if (win.isDestroyed()) return
-    const maximized = win.isMaximized()
-    // When maximized, save the restored bounds (not the maximized ones)
-    const bounds = maximized ? win.getNormalBounds() : win.getBounds()
-    saveBounds({
-      x: bounds.x,
-      y: bounds.y,
-      width: bounds.width,
-      height: bounds.height,
-      maximized
-    })
-  }, 300)
-}
+/** The main window's geometry. The Live copilot window owns a separate store. */
+const mainBounds = createBoundsStore({
+  fileName: 'window-state.json',
+  defaults: { x: -1, y: -1, width: 1200, height: 800, maximized: false },
+  minWidth: MIN_WIDTH,
+  minHeight: MIN_HEIGHT
+})
 
 /* ------------------------------------------------------------------ */
 /* paths                                                               */
@@ -142,28 +74,6 @@ function resolveResource(name: string): string {
     join(process.resourcesPath, 'resources', name)
   ]
   return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]
-}
-
-/**
- * Only the renderer we load is allowed to retain a privileged preload.  Do not
- * use string-prefix checks here: `http://127.0.0.1:5173@evil.example` starts
- * with a development URL but has an attacker-controlled origin.
- */
-function isTrustedRendererUrl(target: string, rendererHtmlPath: string): boolean {
-  try {
-    const parsed = new URL(target)
-    if (rendererDevUrl) {
-      const trusted = new URL(rendererDevUrl)
-      return parsed.protocol === trusted.protocol && parsed.origin === trusted.origin
-    }
-    return (
-      parsed.protocol === 'file:' &&
-      parsed.hostname === '' &&
-      fileURLToPath(parsed) === resolve(rendererHtmlPath)
-    )
-  } catch {
-    return false
-  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -201,15 +111,15 @@ function flushQuickPrompts(win: BrowserWindow): void {
 /* ------------------------------------------------------------------ */
 
 function createWindow(): BrowserWindow {
-  const saved = validateBounds(loadBounds())
+  const saved = mainBounds.load()
   const usePosition = saved.x !== -1 && saved.y !== -1
 
   const win = new BrowserWindow({
     width: saved.width,
     height: saved.height,
     ...(usePosition ? { x: saved.x, y: saved.y } : {}),
-    minWidth: 780,
-    minHeight: 500,
+    minWidth: MIN_WIDTH,
+    minHeight: MIN_HEIGHT,
     show: false,
     backgroundColor: '#1f1e1d',
     autoHideMenuBar: true,
@@ -236,17 +146,10 @@ function createWindow(): BrowserWindow {
     tray?.refresh()
   })
 
-  // Persist bounds on resize/move
-  win.on('resize', () => debouncedSaveBounds(win))
-  win.on('move', () => debouncedSaveBounds(win))
+  // Debounced resize/move persistence plus an immediate save on close.
+  mainBounds.attach(win)
 
   win.on('close', (event) => {
-    // Save bounds immediately on close
-    if (!win.isDestroyed()) {
-      const maximized = win.isMaximized()
-      const bounds = maximized ? win.getNormalBounds() : win.getBounds()
-      saveBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, maximized })
-    }
     if (!quitRequested && appSettings?.get().settings.closeToTray) {
       event.preventDefault()
       win.hide()
@@ -264,7 +167,8 @@ function createWindow(): BrowserWindow {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
 
   win.webContents.on('will-navigate', (event, url) => {
-    if (!isTrustedRendererUrl(url, join(moduleDir, '../renderer/index.html'))) event.preventDefault()
+    if (!isTrustedRendererUrl(url, rendererDevUrl, join(moduleDir, '../renderer/index.html')))
+      event.preventDefault()
   })
 
   win.webContents.on('will-frame-navigate', (event) => {
@@ -389,6 +293,14 @@ if (!allowDevelopmentInstance && !app.requestSingleInstanceLock()) {
         else pendingQuickPrompts.push(text)
       }
     })
+    // The Gemini Live copilot lives in its own floating window so the chat UI
+    // keeps running behind it. geminiLive.ts keys sessions by webContents id,
+    // so that window owns its Live session independently of the main window.
+    liveWindow = setupLiveWindow({
+      preloadPath: resolvePreload(),
+      rendererUrl: rendererDevUrl,
+      rendererHtmlPath: join(moduleDir, '../renderer/index.html')
+    })
     appSettings = createAppSettingsController({ onShortcut: () => quickEntry?.toggle() })
     tray = setupTray({
       iconPath: resolveResource('tray-icon.png'),
@@ -397,11 +309,21 @@ if (!allowDevelopmentInstance && !app.requestSingleInstanceLock()) {
       onHide: hideMainWindow,
       onNewChat: () => sendMainWindowCommand('main-menu:new-session'),
       onQuickEntry: () => quickEntry?.show(),
+      onLiveScreen: () => { liveWindow?.show() },
       onQuit: requestQuit
     })
     setupUpdater(broadcastUpdateStatus, { beforeInstall: () => { quitRequested = true } })
-    setupApplicationMenu({ onCheckForUpdates: () => { void checkForUpdates() }, onQuit: requestQuit })
-    registerIpc({ appSettings, onQuickSubmit: (text) => quickEntry?.submit(text) })
+    setupApplicationMenu({
+      onCheckForUpdates: () => { void checkForUpdates() },
+      onLiveScreen: () => { liveWindow?.show() },
+      onQuickEntry: () => quickEntry?.show(),
+      onQuit: requestQuit
+    })
+    registerIpc({
+      appSettings,
+      onQuickSubmit: (text) => quickEntry?.submit(text),
+      ...(liveWindow ? { liveWindow } : {})
+    })
     createWindow()
 
     void startServer().then((serverStatus) => {
@@ -410,7 +332,10 @@ if (!allowDevelopmentInstance && !app.requestSingleInstanceLock()) {
     if (app.isPackaged) void checkForUpdates()
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+      // Keyed on the MAIN window, not the window count: with the Live copilot
+      // window open, a window-count check would see a live window and refuse to
+      // bring the closed main window back, stranding the user in the copilot.
+      if (!mainWindow || mainWindow.isDestroyed()) createWindow()
     })
   })
 
@@ -431,6 +356,8 @@ if (!allowDevelopmentInstance && !app.requestSingleInstanceLock()) {
     tray = null
     quickEntry?.destroy()
     quickEntry = null
+    liveWindow?.destroy()
+    liveWindow = null
     stopAllGeminiLive()
     stopServer()
     unregisterIpc()

@@ -51,8 +51,8 @@ export function createUiSlice(set: SetState, get: GetState): UiSlice {
 
     setTheme(t: Theme): void {
       set({ theme: t })
-      const { directory, providerID, modelID, autoRotate, modelPool, stickyModel } = get()
-      savePrefs({ directory, providerID, modelID, autoRotate, theme: t, modelPool, stickyModel })
+      const { directory, providerID, modelID, modelPool, routingMode } = get()
+      savePrefs({ directory, providerID, modelID, theme: t, modelPool, routingMode })
     },
 
     setActiveArtifactID(id: string | null): void {

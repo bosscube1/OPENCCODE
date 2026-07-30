@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolPart, ToolState } from '../lib/types'
 import { formatDuration } from '../lib/format'
@@ -522,7 +522,13 @@ function ToolBody({ part, directory }: { part: ToolPart; directory: string }): R
  * Card
  * ------------------------------------------------------------------ */
 
-export function ToolCall({ part }: { part: ToolPart }): ReactNode {
+function ToolCallImpl({
+  part,
+  collapsed = false
+}: {
+  part: ToolPart
+  collapsed?: boolean
+}): ReactNode {
   const [override, setOverride] = useState<boolean | null>(null)
   const directory = useStore((state) => state.directory) ?? ''
 
@@ -533,7 +539,15 @@ export function ToolCall({ part }: { part: ToolPart }): ReactNode {
   // kinds (bash output, reads, etc.) keep the normal collapse-on-completion behavior.
   const isDiffKind = kind === 'edit' || kind === 'multiedit' || kind === 'patch'
   const autoOpen = status === 'running' || status === 'error' || (status === 'completed' && isDiffKind)
-  const open = override ?? autoOpen
+  // `collapsed` is a DEFAULT hint from the orchestrator (older messages start closed to
+  // keep long sessions readable), not a lock: it only feeds the default-open computation
+  // below, it is never written into `override`. So once the user clicks a collapsed card
+  // open, `override` pins it open and this hint is ignored on every later re-render — a
+  // re-render (or the hint itself flipping as the message ages further) can never slam a
+  // user-expanded card shut. In-flight/failed calls (running/error) still default open
+  // even when collapsed is set, since those are the states a user actively needs to see.
+  const defaultOpen = collapsed ? status === 'running' || status === 'error' : autoOpen
+  const open = override ?? defaultOpen
 
   const title = stateTitle(part.state)
   const duration = stateDuration(part.state)
@@ -562,3 +576,33 @@ export function ToolCall({ part }: { part: ToolPart }): ReactNode {
     </div>
   )
 }
+
+/**
+ * `part.state` transitions pending -> running -> completed/error, and each stage can
+ * also mutate in place before the next status lands (a running command's title, output
+ * streaming in chunk by chunk before the terminal status arrives). Nothing else about
+ * the card is visible-state-bearing, so we compare exactly: the tool id (a different
+ * call entirely), `collapsed` (the orchestrator's default-open hint), `status` itself
+ * (drives the dot, whether ToolBody renders, and the default open/closed state), and
+ * the title/output/error/duration derived from state (their lengths/values, not the
+ * whole object, to stay cheap while still catching in-place growth).
+ */
+function toolCallPropsAreEqual(
+  prev: { part: ToolPart; collapsed?: boolean },
+  next: { part: ToolPart; collapsed?: boolean }
+): boolean {
+  if (prev.collapsed !== next.collapsed) return false
+  if (prev.part.id !== next.part.id) return false
+
+  const prevState = prev.part.state
+  const nextState = next.part.state
+  if (prevState.status !== nextState.status) return false
+  if (stateTitle(prevState) !== stateTitle(nextState)) return false
+  if ((stateOutput(prevState)?.length ?? 0) !== (stateOutput(nextState)?.length ?? 0)) return false
+  if ((stateError(prevState)?.length ?? 0) !== (stateError(nextState)?.length ?? 0)) return false
+  if (stateDuration(prevState) !== stateDuration(nextState)) return false
+
+  return true
+}
+
+export const ToolCall = memo(ToolCallImpl, toolCallPropsAreEqual)

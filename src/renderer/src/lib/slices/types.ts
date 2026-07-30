@@ -52,9 +52,14 @@ export interface AppState {
   /** User's pinned choice — mutated only by setModel. Never overwritten by failover. */
   pinnedProviderID: string | null
   pinnedModelID: string | null
-  autoRotate: boolean
   modelPool: string[] | null
-  stickyModel: boolean
+  /**
+   * The ONLY source of truth for routing behaviour. The legacy `autoRotate`/`stickyModel`
+   * booleans are gone from state: they were a second, divergent source that no gate ever
+   * read, so the UI could advertise auto-routing while `locked` silently suppressed it.
+   * They survive on disk only as derived keys written by `savePrefs` for downgrade safety.
+   * Auto model-switching is active iff `routingMode !== 'locked'`.
+   */
   routingMode: RoutingMode
   showPaidModels: boolean
   // permissions awaiting user answer, oldest first
@@ -148,8 +153,8 @@ export interface AppState {
   abort(): Promise<void>
   setModel(providerID: string, modelID: string): void
   revertToPinned(): void
+  /** Toggles auto model-switching: `locked` <-> `failover`. Any non-locked mode toggles off. */
   toggleAutoRotate(): void
-  toggleStickyModel(): void
   setRoutingMode(mode: RoutingMode): void
   setShowPaidModels(v: boolean): void
   setModelPool(pool: string[] | null): void

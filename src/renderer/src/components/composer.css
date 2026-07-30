@@ -619,6 +619,31 @@
   color: var(--accent);
 }
 
+.composer__attach {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  font-size: 13px;
+  line-height: 1;
+  border-radius: var(--radius);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+
+.composer__attach:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.composer__attach:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .composer__pill {
   display: inline-flex;
   align-items: center;

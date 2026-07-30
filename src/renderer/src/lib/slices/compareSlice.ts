@@ -45,8 +45,8 @@ export function createCompareSlice(set: SetState, get: GetState): CompareSlice {
     setCompareTargets(keys: string[]): void {
       const deduped = [...new Set(keys)].slice(0, MAX_COMPARE_TARGETS)
       set({ compareTargets: deduped })
-      const { directory, providerID, modelID, autoRotate, theme, modelPool, stickyModel, routingMode, showPaidModels } = get()
-      savePrefs({ directory, providerID, modelID, autoRotate, theme, modelPool, stickyModel, routingMode, showPaidModels, compareTargets: deduped })
+      const { directory, providerID, modelID, theme, modelPool, routingMode, showPaidModels } = get()
+      savePrefs({ directory, providerID, modelID, theme, modelPool, routingMode, showPaidModels, compareTargets: deduped })
     },
 
     /**

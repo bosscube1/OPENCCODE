@@ -22,6 +22,21 @@ function messageDomID(id: string): string {
 /** How close to the bottom still counts as "following along", in pixels. */
 const STICK_THRESHOLD = 80
 
+/**
+ * Only the newest slice of a session is mounted. Long agentic sessions ran into
+ * hundreds of messages, each rendering its own tool calls, and re-rendered the
+ * lot on every streamed token.
+ *
+ * Windowing rather than a virtualiser is deliberate: the sticky-scroll effects
+ * and the two scroll-to-message paths (in-session find and global chat search)
+ * all resolve a message by DOM id, and a virtualiser would mean rebuilding all
+ * of that. The cost is that those paths must widen the window before scrolling
+ * — see `revealMessage`.
+ */
+const WINDOW_STEP = 60
+/** Tool calls older than this many messages from the end start collapsed. */
+const TOOLS_EXPANDED_TAIL = 10
+
 const SUGGESTIONS = [
   'Give me a tour of this codebase — entry points, structure, how it runs.',
   'Find the bug: run the tests and fix whatever fails.',
@@ -72,6 +87,7 @@ export function Chat(): ReactNode {
   const [detached, setDetached] = useState(false)
   const detachedRef = useRef(false)
 
+  const [windowSize, setWindowSize] = useState(WINDOW_STEP)
   const [searchOpen, setSearchOpen] = useState(false)
   const [findOpen, setFindOpen] = useState(false)
   const [findQuery, setFindQuery] = useState('')
@@ -96,6 +112,43 @@ export function Chat(): ReactNode {
     if (next !== detachedRef.current) setDetachedBoth(next)
   }, [setDetachedBoth])
 
+  /* ---- windowing --------------------------------------------------------- */
+
+  const olderCount = Math.max(0, messages.length - windowSize)
+  const visibleMessages = olderCount > 0 ? messages.slice(olderCount) : messages
+
+  // Prepending older messages grows the scroll box upwards, which would yank the
+  // reader's position. Pin the distance from the BOTTOM, which is invariant here.
+  const loadOlder = useCallback(() => {
+    const element = scrollRef.current
+    const anchor = element ? element.scrollHeight - element.scrollTop : null
+    setWindowSize((size) => size + WINDOW_STEP)
+    if (element === null || anchor === null) return
+    window.requestAnimationFrame(() => {
+      const current = scrollRef.current
+      if (current) current.scrollTop = current.scrollHeight - anchor
+    })
+  }, [])
+
+  /**
+   * Scroll to a message, widening the window first when it sits outside it.
+   * Both scroll-to-message paths MUST go through here: the element does not
+   * exist in the DOM until the widened window has rendered, so the scroll is
+   * deferred a frame.
+   */
+  const revealMessage = useCallback(
+    (messageID: string, behavior: ScrollBehavior = 'smooth') => {
+      const index = messages.findIndex((m) => m.info.id === messageID)
+      if (index < 0) return
+      const needed = messages.length - index
+      if (needed > windowSize) setWindowSize(needed + WINDOW_STEP)
+      window.requestAnimationFrame(() => {
+        document.getElementById(messageDomID(messageID))?.scrollIntoView({ behavior, block: 'center' })
+      })
+    },
+    [messages, windowSize]
+  )
+
   // New content: follow it only when the user has not scrolled away. Returning from a
   // subagent tab remounts the scroll container, so re-follow on that transition too.
   useLayoutEffect(() => {
@@ -113,9 +166,11 @@ export function Chat(): ReactNode {
     return () => observer.disconnect()
   }, [scrollToBottom])
 
-  // Switching sessions always lands at the newest message.
+  // Switching sessions always lands at the newest message, with a fresh window —
+  // an expanded window must not carry over into an unrelated session.
   useLayoutEffect(() => {
     setDetachedBoth(false)
+    setWindowSize(WINDOW_STEP)
     scrollToBottom()
   }, [activeSessionID, scrollToBottom, setDetachedBoth])
 
@@ -126,26 +181,28 @@ export function Chat(): ReactNode {
     return () => window.removeEventListener(OPEN_SEARCH_EVENT, openSearch)
   }, [])
 
-  // A global-search hit lands here once its session is active — scroll to the message.
+  // A global-search hit lands here once its session is active — scroll to the
+  // message, widening the window when the hit is older than what is mounted.
   useEffect(() => {
     const onScrollTo = (e: Event): void => {
       const messageID = (e as CustomEvent<{ messageID: string }>).detail?.messageID
       if (!messageID) return
-      window.setTimeout(() => {
-        document.getElementById(messageDomID(messageID))?.scrollIntoView({
-          behavior: 'smooth',
-          block: 'center'
-        })
-      }, 60)
+      // The delay stays: the session's messages may still be loading when the hit arrives.
+      window.setTimeout(() => revealMessage(messageID), 60)
     }
     window.addEventListener(SCROLL_TO_MESSAGE_EVENT, onScrollTo)
     return () => window.removeEventListener(SCROLL_TO_MESSAGE_EVENT, onScrollTo)
-  }, [])
+  }, [revealMessage])
 
   // Ctrl+F opens an in-session find bar over the currently loaded messages.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'f') {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
+        // Sidebar.tsx has advertised Ctrl+Shift+F in its tooltip all along while
+        // nothing bound it. Same event the sidebar button dispatches.
+        e.preventDefault()
+        setSearchOpen(true)
+      } else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'f') {
         e.preventDefault()
         setFindOpen(true)
       } else if (e.key === 'Escape' && findOpen) {
@@ -171,17 +228,17 @@ export function Chat(): ReactNode {
     setFindIndex(0)
   }, [findQuery])
 
+  // findMatches is computed over ALL messages, not the mounted window, so find
+  // still reaches matches that are scrolled out of the window — revealMessage
+  // mounts them on demand.
   const gotoFindMatch = useCallback(
     (index: number) => {
       if (findMatches.length === 0) return
       const wrapped = ((index % findMatches.length) + findMatches.length) % findMatches.length
       setFindIndex(wrapped)
-      document.getElementById(messageDomID(findMatches[wrapped]))?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'center'
-      })
+      revealMessage(findMatches[wrapped])
     },
-    [findMatches]
+    [findMatches, revealMessage]
   )
 
   const canPrompt = directory !== null && providerID !== null && modelID !== null
@@ -301,19 +358,31 @@ export function Chat(): ReactNode {
                 ) : null}
               </div>
             ) : (
-              messages.map((message) => (
-                <div
-                  key={message.info.id}
-                  id={messageDomID(message.info.id)}
-                  className={
-                    findOpen && findMatches[findIndex] === message.info.id
-                      ? 'chat__msgwrap chat__msgwrap--findactive'
-                      : 'chat__msgwrap'
-                  }
-                >
-                  <MessageView message={message} />
-                </div>
-              ))
+              <>
+                {olderCount > 0 ? (
+                  <button type="button" className="chat__loadolder" onClick={loadOlder}>
+                    Load {Math.min(WINDOW_STEP, olderCount)} earlier message
+                    {Math.min(WINDOW_STEP, olderCount) === 1 ? '' : 's'}
+                    <span className="chat__loadolder-count">{olderCount} older</span>
+                  </button>
+                ) : null}
+                {visibleMessages.map((message, index) => (
+                  <div
+                    key={message.info.id}
+                    id={messageDomID(message.info.id)}
+                    className={
+                      findOpen && findMatches[findIndex] === message.info.id
+                        ? 'chat__msgwrap chat__msgwrap--findactive'
+                        : 'chat__msgwrap'
+                    }
+                  >
+                    <MessageView
+                      message={message}
+                      collapseTools={visibleMessages.length - index > TOOLS_EXPANDED_TAIL}
+                    />
+                  </div>
+                ))}
+              </>
             )}
           </div>
         </div>

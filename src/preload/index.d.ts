@@ -362,6 +362,8 @@ export interface OpencodeApi {
   status(): Promise<ServerStatus>
   restart(): Promise<ServerStatus>
   pickDirectory(): Promise<string | null>
+  /** Native multi-select file picker. Returns absolute paths, or [] when canceled. */
+  pickFiles(): Promise<string[]>
   sessions: {
     list(directory: string): Promise<Session[]>
     create(directory: string, title?: string): Promise<Session>
@@ -401,6 +403,11 @@ export interface OpencodeApi {
   quick: {
     submit(text: string): Promise<void>
   }
+  liveWindow: {
+    open(): Promise<void>
+    close(): Promise<void>
+    setAlwaysOnTop(on: boolean): Promise<void>
+  }
   appSettings: {
     get(): Promise<AppSettingsResult>
     set(patch: Partial<AppSettings>): Promise<AppSettingsResult>
@@ -427,6 +434,7 @@ export interface OpencodeApi {
     onMessage(cb: (event: GeminiLiveEvent) => void): () => void
     /** Saves the transcript as markdown under userData/live-transcripts; resolves to the file path. */
     saveTranscript(a: { messages: LiveTranscriptMessage[] }): Promise<string>
+    revealTranscripts(): Promise<void>
   }
   nanogpt: {
     /** Cached catalogues — no network call. */
@@ -460,6 +468,8 @@ export interface OpencodeApi {
   exportChat(defaultName: string, content: string): Promise<boolean>
   /** `encoding` defaults to 'utf8'; pass 'base64' to write bytes (e.g. a generated PNG). */
   saveFile(a: { defaultName: string; content: string; encoding?: 'utf8' | 'base64' }): Promise<boolean>
+  /** Persists a pasted clipboard image (base64 `data`, allowlisted `ext`) and returns its absolute path. */
+  saveClipboardImage(a: { data: string; ext: string }): Promise<string>
   fs: {
     tree(directory: string, path?: string, depth?: number): Promise<FileNode[]>
     read(directory: string, path: string): Promise<FileContent>

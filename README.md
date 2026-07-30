@@ -9,6 +9,93 @@ That means **any** provider OpenCode supports: Groq, Google Gemini, OpenRouter, 
 Mistral, local Ollama, and so on. There is no Anthropic dependency anywhere in the app — the
 model picker is populated entirely from whatever providers you have authenticated.
 
+![OpenCode Desktop running a fan-out of three subagents, with the chat transcript on the left and the project file tree on the right](docs/screenshots/01-chat-subagents.png)
+
+---
+
+## ELI5 — what is this thing?
+
+**It's a desktop app where an AI does the typing, and you stay in charge.**
+
+You open one of your code folders, tell the AI what you want in plain English, and it goes and
+does it — reads your files, edits them, runs commands in a terminal, checks the results. You
+watch the whole thing happen live and approve anything risky before it runs.
+
+**The part that makes it different: it isn't tied to one AI company.**
+
+Most tools like this only talk to one company's AI, and you pay that company. This one talks to
+whichever AI you point it at — Google's Gemini, Groq, Mistral, Cerebras, OpenRouter, or a model
+running on your own machine. Several of those have free tiers, and the app is built around that:
+if the free model you're using hits its rate limit mid-task, the app notices and switches to
+another healthy free one instead of dying.
+
+**How the pieces fit together**
+
+Think of it as three things stacked up:
+
+| Piece | Plain English | The technical name |
+|---|---|---|
+| The window you look at | Buttons, chat bubbles, the file tree, the diff view | The Electron/React renderer |
+| The bit that does real work | Actually touches your files, runs git, opens terminals, holds your API keys | The Electron main process |
+| The brain | Decides what to do next and calls the AI | The `opencode` CLI, running in the background |
+
+The window can't touch your files directly. Everything it wants to do has to be asked for through
+a single locked-down doorway, and the middle layer checks each request — is this path actually
+inside the project folder? is this file too big? Doing it this way means a bug in the pretty part
+can't wreck your disk.
+
+**What you actually see when you use it**
+
+- A **chat** on the left, where the AI's work streams in as it happens — every file it reads,
+  every command it runs, shown as a card you can expand.
+- A **panel** on the right that flips between your file tree, a code editor, the diff of what
+  changed, a git view, and a real terminal.
+- An **approval prompt** any time the AI wants to do something that touches your machine, unless
+  you've told it that particular thing is fine.
+- A **model picker** at the bottom, so you can swap which AI is driving at any point — even
+  halfway through a conversation.
+
+**Is it going to break my code?**
+
+It can edit files, so work in a git repo and commit before you turn it loose. Two guardrails are
+built in and can't be switched off: the app will **never** `git push` and never force-anything
+(pushing is a decision you make yourself, in your own terminal), and it can only read and write
+inside the folder you opened.
+
+**Do I need to pay for an AI subscription?**
+
+No. Free API keys from Groq, Google AI Studio, or OpenRouter are enough to use it properly. See
+[Adding free provider keys](#adding-free-provider-keys) below.
+
+---
+
+## Screenshots
+
+**Subagent tabs.** When the agent delegates work with the `task` tool, each child gets its own
+real session — and its own tab. You can watch any of them without losing your place in the main
+conversation.
+
+![Subagent tabs across the top of the chat: Main, plus one tab per delegated task, each labelled with the agent that ran it](docs/screenshots/02-subagent-tabs.png)
+
+**Any provider, one picker.** Models are grouped by provider, searchable, and annotated with
+context length and capabilities. Free providers sort first; paid ones are hidden until you ask
+for them, and auto-failover will never route to one.
+
+![The model picker open, showing models grouped by provider with context-length and tool-capability badges](docs/screenshots/03-model-picker.png)
+
+**Smart routing, and it shows its working.** Pick how much freedom the app has — `Locked` runs
+exactly what you chose, `Failover` keeps your pick but switches to a healthy free model on a 429
+or a stall, `Auto` picks the healthiest model each turn. The live health table underneath is real
+telemetry: requests used against each model's published cap, success rate, average latency.
+
+![Routing mode selector set to Failover, above the candidate model pool and a live per-model health table showing request counts and latency](docs/screenshots/04-smart-routing.png)
+
+**A review surface, not an IDE.** The right-hand panel carries the file tree, a Monaco editor
+with per-hunk accept/reject, the working-tree diff, a git panel, and a real terminal pinned to
+the project directory. Shown here reviewing this repository's own uncommitted changes.
+
+![The Changes panel showing a unified diff of CONTRACTS.md with added lines highlighted](docs/screenshots/05-changes-diff.png)
+
 ---
 
 ## Download

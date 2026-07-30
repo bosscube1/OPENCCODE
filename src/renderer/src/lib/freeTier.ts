@@ -25,25 +25,33 @@ export interface FreeTierEntry {
 }
 
 export const FREE_MODEL_TIERS: readonly FreeTierEntry[] = [
-  // S-tier — best free agentic
-  { providerID: 'google', modelID: 'gemini-3.6-flash', tier: 'S', rpm: 10, rpd: null, note: 'best free agentic; opaque daily cap' },
-  { providerID: 'google', modelID: 'gemini-3.5-flash', tier: 'S', rpm: 10, rpd: null, note: 'strong; some accounts get 0 RPD immediately' },
+  // S-tier — best free agentic. NOTE the RPD: 20/day is the real Flash allowance,
+  // which an agentic session can exhaust in a single task. Flash-Lite below carries
+  // 500/day and is the model to fall back to, not another Flash.
+  { providerID: 'google', modelID: 'gemini-3.6-flash', tier: 'S', rpm: 5, rpd: 20, note: 'best free agentic; only 20/day, resets midnight PT' },
+  { providerID: 'google', modelID: 'gemini-3.5-flash', tier: 'S', rpm: 5, rpd: 20, note: 'strong; 20/day' },
+  { providerID: 'google', modelID: 'gemini-3-flash', tier: 'S', rpm: 5, rpd: 20, note: '20/day; model ID inferred from the AI Studio dashboard label' },
 
   // A-tier — strong alternatives
   { providerID: 'groq', modelID: 'openai/gpt-oss-120b', tier: 'A', rpm: 30, rpd: 1000, note: '8K TPM bottleneck; no parallel tool calls' },
-  { providerID: 'cerebras', modelID: 'gpt-oss-120b', tier: 'A', rpm: 5, rpd: null, note: 'only GA Cerebras free; card required' },
-  { providerID: 'mistral', modelID: 'devstral-latest', tier: 'A', rpm: 60, rpd: null, note: 'purpose-built agentic coding' },
-  { providerID: 'mistral', modelID: 'mistral-medium-latest', tier: 'A', rpm: 60, rpd: null, note: 'frontier general/agentic' },
+  { providerID: 'cerebras', modelID: 'gpt-oss-120b', tier: 'A', rpm: 30, rpd: 14400, note: 'generous RPD but 1M tokens/day is the real ceiling' },
+  { providerID: 'mistral', modelID: 'devstral-latest', tier: 'A', rpm: 2, rpd: null, note: 'purpose-built agentic coding; RPM unpublished, see OPAQUE_RPM_PROVIDERS' },
+  { providerID: 'mistral', modelID: 'mistral-medium-latest', tier: 'A', rpm: 2, rpd: null, note: 'frontier general/agentic; RPM unpublished' },
 
   // B-tier — stable fallbacks
   { providerID: 'groq', modelID: 'llama-3.3-70b-versatile', tier: 'B', rpm: 30, rpd: 1000, note: '12K TPM, parallel tools' },
-  { providerID: 'google', modelID: 'gemini-2.5-flash', tier: 'B', rpm: 10, rpd: null, note: 'stable fallback' },
-  { providerID: 'mistral', modelID: 'ministral-8b-latest', tier: 'B', rpm: 60, rpd: null, note: 'routine steps' },
+  { providerID: 'google', modelID: 'gemini-2.5-flash', tier: 'B', rpm: 5, rpd: 20, note: 'stable fallback; 20/day' },
+  // 500/day — 25x any Flash. The highest-throughput free Google models by a wide
+  // margin, so they carry the long sessions once Flash's 20 are gone.
+  { providerID: 'google', modelID: 'gemini-3.5-flash-lite', tier: 'B', rpm: 15, rpd: 500, note: '500/day; the real Google workhorse' },
+  { providerID: 'google', modelID: 'gemini-3.1-flash-lite', tier: 'B', rpm: 15, rpd: 500, note: '500/day' },
+  { providerID: 'mistral', modelID: 'ministral-8b-latest', tier: 'B', rpm: 2, rpd: null, note: 'routine steps; RPM unpublished' },
 
   // C-tier — subtasks / chores only
-  { providerID: 'groq', modelID: 'llama-3.1-8b-instant', tier: 'C', rpm: 30, rpd: 14400, note: 'subtasks only' },
-  { providerID: 'openrouter', modelID: 'nvidia/nemotron-nano-9b-v2:free', tier: 'C', rpm: 20, rpd: 50, note: 'RPD scales with lifetime credit' },
-  { providerID: 'cohere', modelID: 'command-r7b-12-2024', tier: 'C', rpm: 20, rpd: 33, note: 'trial only' },
+  { providerID: 'groq', modelID: 'llama-3.1-8b-instant', tier: 'C', rpm: 30, rpd: 14400, note: 'subtasks only; most permissive Groq RPD' },
+  { providerID: 'google', modelID: 'gemini-2.5-flash-lite', tier: 'C', rpm: 10, rpd: 20, note: 'only 20/day despite being Lite — not a high-volume option' },
+  { providerID: 'openrouter', modelID: 'nvidia/nemotron-nano-9b-v2:free', tier: 'C', rpm: 20, rpd: 50, note: '50/day account-wide; 1000 after a lifetime $10 credit purchase' },
+  { providerID: 'cohere', modelID: 'command-r7b-12-2024', tier: 'C', rpm: 20, rpd: 33, note: 'trial only; not re-verified 2026-07-29' },
 ] as const
 
 // ---------------------------------------------------------------------------
@@ -165,17 +173,96 @@ export function poolForTask(task: TaskKind): readonly FreeTierEntry[] {
 // Provider caps — authoritative seed for the ledger, replaces routing.ts values
 // ---------------------------------------------------------------------------
 
+/**
+ * Providers that no longer publish free-tier request limits. Their numbers above are
+ * deliberately pessimistic guesses, so a 429 from them carries information the table
+ * does not — the router should trust observed 429s over these constants.
+ */
+export const OPAQUE_RPM_PROVIDERS: ReadonlySet<string> = new Set(['mistral', 'nanogpt'])
+
+/**
+ * THE rate-cap table. Both the router and the Routing panel read this — previously the
+ * router enforced `DEFAULT_PROVIDER_CAPS` in routing.ts while the panel displayed these,
+ * so the UI and the throttle disagreed on every provider (mistral 5 vs 60 rpm, cerebras
+ * 30 vs 5, openrouter 200 vs 50 rpd, nanogpt uncapped in the router entirely).
+ *
+ * Keys are either `providerID` or `providerID/modelID`; the more specific entry wins.
+ * That distinction is also the counting scope — see `capsFor` in routing.ts:
+ *
+ *   - a `providerID/modelID` entry counts only that model's sends, because the provider
+ *     enforces the limit per model (Google: per model per project; Groq: per model per
+ *     org; Cerebras: per model)
+ *   - a `providerID` entry counts every send to that provider, because the limit is
+ *     account-wide (OpenRouter's 50/day spans all free models)
+ *
+ * Google's numbers come from the account's own AI Studio → Rate Limit dashboard
+ * (read 2026-07-29), which supersedes published documentation: the docs describe
+ * 10 RPM / 250 RPD for Flash, the dashboard shows 5 RPM / 20 RPD / 250K TPM. Free
+ * quotas are per project and vary by account, so the observed values win.
+ *
+ * The 20/day Flash allowance is small enough that TPM, not RPM, is what a coding
+ * session actually hits — hence `tpm` here and token accounting in the ledger.
+ *
+ * Daily windows: Google resets at midnight Pacific, so its entries say so rather than
+ * relying on a rolling 24h window that would lock a model out for hours after the real
+ * quota had already reset.
+ */
 export const FREE_PROVIDER_CAPS: ModelCapsMap = {
-  // GUESS: NanoGPT publishes no per-minute/per-day request limits. 60 rpm is a deliberately
-  // conservative placeholder so the ledger has something to throttle against; tune from observed
-  // 429s. Subscription quota is enforced server-side and surfaced separately via nanogpt.usage().
+  // GUESS: NanoGPT publishes no per-minute/per-day request limits. Subscription quota is
+  // enforced server-side and surfaced separately via nanogpt.usage(). Provider-scoped
+  // because there is no per-model information to key on.
   nanogpt: { rpm: 60 },
-  groq: { rpm: 30, rpd: 1000 },
-  google: { rpm: 10 },
-  cerebras: { rpm: 5 },
-  mistral: { rpm: 60 },
-  cohere: { rpm: 20, rpd: 33 },
+
+  // Mistral stopped publishing free-tier RPM; real ceilings only appear in their admin
+  // console. 2 rpm is the lowest figure currently reported for the free Experiment tier —
+  // pessimistic on purpose, and listed in OPAQUE_RPM_PROVIDERS so 429s can correct it.
+  mistral: { rpm: 2 },
+
+  // Account-wide across every free model, not per model.
   openrouter: { rpm: 20, rpd: 50 },
+  cohere: { rpm: 20, rpd: 33 },
+
+  // Per-provider floors for models not named below. Deliberately the STRICTEST
+  // Google tier: an unrecognised model ID must be assumed to carry the 20/day Flash
+  // allowance, never the 500/day Flash-Lite one. Specific entries raise it.
+  google: { rpm: 5, rpd: 20, tpm: 250_000, rpdWindow: 'day-pt' },
+  groq: { rpm: 30, rpd: 1000 },
+  cerebras: { rpm: 30, rpd: 14400 },
+
+  // Per-model entries — these are where the real limits live.
+  // Google Flash class: 5 rpm / 250K tpm / 20 rpd.
+  'google/gemini-3.6-flash': { rpm: 5, rpd: 20, tpm: 250_000, rpdWindow: 'day-pt' },
+  'google/gemini-3.5-flash': { rpm: 5, rpd: 20, tpm: 250_000, rpdWindow: 'day-pt' },
+  'google/gemini-3-flash': { rpm: 5, rpd: 20, tpm: 250_000, rpdWindow: 'day-pt' },
+  'google/gemini-2.5-flash': { rpm: 5, rpd: 20, tpm: 250_000, rpdWindow: 'day-pt' },
+  // Flash-Lite 3.x: 15 rpm / 500 rpd. 2.5 Flash-Lite is NOT in this club — it gets
+  // 10 rpm / 20 rpd, so it must not inherit the 3.x numbers by name similarity.
+  'google/gemini-3.5-flash-lite': { rpm: 15, rpd: 500, tpm: 250_000, rpdWindow: 'day-pt' },
+  'google/gemini-3.1-flash-lite': { rpm: 15, rpd: 500, tpm: 250_000, rpdWindow: 'day-pt' },
+  'google/gemini-2.5-flash-lite': { rpm: 10, rpd: 20, tpm: 250_000, rpdWindow: 'day-pt' },
+  // Gemma: tiny TPM (16K) but a huge 14.4K daily allowance.
+  'google/gemma-4-26b': { rpm: 30, rpd: 14400, tpm: 16_000, rpdWindow: 'day-pt' },
+  'google/gemma-4-31b': { rpm: 30, rpd: 14400, tpm: 16_000, rpdWindow: 'day-pt' },
+
+  'groq/openai/gpt-oss-120b': { rpm: 30, rpd: 1000, tpm: 8_000 },
+  'groq/llama-3.3-70b-versatile': { rpm: 30, rpd: 1000, tpm: 12_000 },
+  'groq/llama-3.1-8b-instant': { rpm: 30, rpd: 14400 },
+  'cerebras/gpt-oss-120b': { rpm: 30, rpd: 14400 },
+}
+
+/**
+ * Google's Live API is metered on tokens only — the dashboard reports Unlimited for
+ * both RPM and RPD on every Live model. Request-count throttling would be pure
+ * false positives there, so these keys carry a TPM budget and nothing else.
+ *
+ * Kept separate from FREE_PROVIDER_CAPS because the Live session runs through
+ * geminiLive.ts in the main process, not through the router's ledger. This is the
+ * reference for that path rather than something selectModel consults.
+ */
+export const GEMINI_LIVE_CAPS: ModelCapsMap = {
+  'google/gemini-3-flash-live': { tpm: 65_000 },
+  'google/gemini-2.5-flash-native-audio-dialog': { tpm: 1_000_000 },
+  'google/gemini-3.5-live-translate': { tpm: 20_000 },
 }
 
 // ---------------------------------------------------------------------------

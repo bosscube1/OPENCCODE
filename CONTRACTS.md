@@ -110,6 +110,13 @@ Every handler returns `Promise<T>` and **throws** on failure (renderer catches).
 'oc:status'            () => { running: boolean; url: string | null; streamConnected: boolean; error?: string }
 'oc:restart'           () => { running: boolean; url: string | null; streamConnected: boolean; error?: string }
 'oc:pickDirectory'     () => string | null              // native folder dialog
+'oc:pickFiles'         () => string[]                   // native multi-select file dialog; [] on cancel
+'oc:clipboard:saveImage' (args: { data: string; ext: string }) => string
+                        // persists a pasted clipboard image (base64 data, ext allowlisted
+                        // to png|jpg|jpeg|gif|webp — no svg) under
+                        // userData/pasted-images/paste-<epochMs>-<counter>.<ext>. Main
+                        // generates the filename; a 5 MiB decoded-byte cap is enforced.
+                        // Prunes files older than 7 days on each write (best-effort).
 'oc:sessions:list'     (directory: string) => Session[]
 'oc:sessions:create'   (directory: string, title?: string) => Session
 'oc:sessions:delete'   (directory: string, id: string) => void
@@ -211,6 +218,22 @@ Every handler returns `Promise<T>` and **throws** on failure (renderer catches).
 'oc:live:saveTranscript' (args: { messages: LiveTranscriptMessage[] }) => string
                         // writes userData/live-transcripts/<timestamp>.md and
                         // returns the path. Bounds: ≤5000 messages, ≤32k chars each.
+'oc:live:transcripts:reveal' () => void
+                        // opens userData/live-transcripts in the OS file manager,
+                        // creating it if absent. Takes NO renderer-supplied path —
+                        // the directory is derived in main, so there is nothing to
+                        // validate and no way to point it at an arbitrary location.
+
+// --- Gemini Live copilot window (a separate floating BrowserWindow) ---
+'oc:liveWindow:open'           () => void
+                        // shows and focuses the floating `#/live` window, creating
+                        // it on demand. The copilot runs in its own window so chat
+                        // keeps running behind it; because geminiLive.ts keys every
+                        // session by webContents id, that window owns its own Live
+                        // session and closing it tears the session down.
+'oc:liveWindow:close'          () => void
+'oc:liveWindow:setAlwaysOnTop' (on: boolean) => void
+                        // no-op when the window does not exist.
 ```
 
 ### Listener channels (renderer -> main, `ipcMain.on`)
@@ -322,6 +345,7 @@ export interface OpencodeApi {
   status(): Promise<ServerStatus>
   restart(): Promise<ServerStatus>
   pickDirectory(): Promise<string | null>
+  pickFiles(): Promise<string[]>
   sessions: {
     list(directory: string): Promise<Session[]>
     create(directory: string, title?: string): Promise<Session>
@@ -353,6 +377,11 @@ export interface OpencodeApi {
     auth(directory: string, name: string): Promise<McpSnapshot>
   }
   quick: { submit(text: string): Promise<void> }
+  liveWindow: {
+    open(): Promise<void>
+    close(): Promise<void>
+    setAlwaysOnTop(on: boolean): Promise<void>
+  }
   appSettings: {
     get(): Promise<AppSettingsResult>
     set(patch: Partial<AppSettings>): Promise<AppSettingsResult>
@@ -373,6 +402,7 @@ export interface OpencodeApi {
     stop(): Promise<void>
     onMessage(cb: (event: GeminiLiveEvent) => void): () => void
     saveTranscript(a: { messages: LiveTranscriptMessage[] }): Promise<string> // -> saved file path
+    revealTranscripts(): Promise<void>
   }
   nanogpt: {
     /** Cached catalogues — cheap, synchronous in main, no network. */
@@ -398,6 +428,8 @@ export interface OpencodeApi {
   openExternal(url: string): Promise<void>
   exportChat(defaultName: string, content: string): Promise<boolean>
   saveFile(a: { defaultName: string; content: string }): Promise<boolean>
+  pickFiles(): Promise<string[]>      // native multi-select file dialog; [] on cancel
+  saveClipboardImage(a: { data: string; ext: string }): Promise<string>  // pasted clipboard image -> absolute path
   pathForFile(file: File): string     // wraps electron.webUtils.getPathForFile for drag-drop
   onEvent(cb: (e: OcEvent) => void): () => void            // returns unsubscribe
   onServer(cb: (s: ServerStatus) => void): () => void

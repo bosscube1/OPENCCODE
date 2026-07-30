@@ -4,6 +4,7 @@ import type { Model, Provider } from '@opencode-ai/sdk'
 import { useStore } from '../lib/store'
 import { isAgentModel } from '../lib/models'
 import { isFreeModel, isSubscriptionProvider } from '../lib/freeTier'
+import { isAutoRoutingActive } from '../lib/routing'
 
 /** Dispatched by App.tsx on Ctrl+K. */
 const FOCUS_MODEL_EVENT = 'opencode-desktop:focus-model'
@@ -48,7 +49,9 @@ export function ModelPicker({ compact = false }: { compact?: boolean } = {}): JS
   const providerID = useStore((s) => s.providerID)
   const modelID = useStore((s) => s.modelID)
   const setModel = useStore((s) => s.setModel)
-  const autoRotate = useStore((s) => s.autoRotate)
+  // Derived from routingMode, never a separate flag — the badge must not be able to claim
+  // auto-routing is on while `locked` suppresses every failover.
+  const autoRotate = useStore((s) => isAutoRoutingActive(s.routingMode))
   const toggleAutoRotate = useStore((s) => s.toggleAutoRotate)
   const showPaidModels = useStore((s) => s.showPaidModels)
 

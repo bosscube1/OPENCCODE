@@ -349,6 +349,8 @@ export interface OpencodeApi {
   status(): Promise<ServerStatus>
   restart(): Promise<ServerStatus>
   pickDirectory(): Promise<string | null>
+  /** Native multi-select file picker. Returns absolute paths, or [] when canceled. */
+  pickFiles(): Promise<string[]>
   sessions: {
     list(directory: string): Promise<Session[]>
     create(directory: string, title?: string): Promise<Session>
@@ -388,6 +390,11 @@ export interface OpencodeApi {
   quick: {
     submit(text: string): Promise<void>
   }
+  liveWindow: {
+    open(): Promise<void>
+    close(): Promise<void>
+    setAlwaysOnTop(on: boolean): Promise<void>
+  }
   appSettings: {
     get(): Promise<AppSettingsResult>
     set(patch: Partial<AppSettings>): Promise<AppSettingsResult>
@@ -414,6 +421,7 @@ export interface OpencodeApi {
     onMessage(cb: (event: GeminiLiveEvent) => void): () => void
     /** Saves the transcript as markdown under userData/live-transcripts; resolves to the file path. */
     saveTranscript(a: { messages: LiveTranscriptMessage[] }): Promise<string>
+    revealTranscripts(): Promise<void>
   }
   nanogpt: {
     /** Cached catalogues — cheap, synchronous in main, no network. */
@@ -447,6 +455,8 @@ export interface OpencodeApi {
   exportChat(defaultName: string, content: string): Promise<boolean>
   /** `encoding` defaults to 'utf8'; pass 'base64' to write bytes (e.g. a generated PNG). */
   saveFile(a: { defaultName: string; content: string; encoding?: 'utf8' | 'base64' }): Promise<boolean>
+  /** Persists a pasted clipboard image (base64 `data`, allowlisted `ext`) and returns its absolute path. */
+  saveClipboardImage(a: { data: string; ext: string }): Promise<string>
   fs: {
     tree(directory: string, path?: string, depth?: number): Promise<FileNode[]>
     read(directory: string, path: string): Promise<FileContent>
@@ -506,6 +516,7 @@ const api: OpencodeApi = {
   status: () => ipcRenderer.invoke('oc:status'),
   restart: () => ipcRenderer.invoke('oc:restart'),
   pickDirectory: () => ipcRenderer.invoke('oc:pickDirectory'),
+  pickFiles: () => ipcRenderer.invoke('oc:pickFiles'),
   sessions: {
     list: (directory) => ipcRenderer.invoke('oc:sessions:list', directory),
     create: (directory, title) => ipcRenderer.invoke('oc:sessions:create', directory, title),
@@ -545,6 +556,11 @@ const api: OpencodeApi = {
   quick: {
     submit: (text) => ipcRenderer.invoke('oc:quick:submit', text)
   },
+  liveWindow: {
+    open: () => ipcRenderer.invoke('oc:liveWindow:open'),
+    close: () => ipcRenderer.invoke('oc:liveWindow:close'),
+    setAlwaysOnTop: (on) => ipcRenderer.invoke('oc:liveWindow:setAlwaysOnTop', on)
+  },
   appSettings: {
     get: () => ipcRenderer.invoke('oc:appSettings:get'),
     set: (patch) => ipcRenderer.invoke('oc:appSettings:set', patch)
@@ -564,7 +580,8 @@ const api: OpencodeApi = {
     send: (input) => ipcRenderer.send('oc:live:send', input),
     stop: () => ipcRenderer.invoke('oc:live:stop'),
     onMessage: (cb) => subscribe<GeminiLiveEvent>('oc:live:message', cb),
-    saveTranscript: (a) => ipcRenderer.invoke('oc:live:saveTranscript', a)
+    saveTranscript: (a) => ipcRenderer.invoke('oc:live:saveTranscript', a),
+    revealTranscripts: () => ipcRenderer.invoke('oc:live:transcripts:reveal')
   },
   nanogpt: {
     models: () => ipcRenderer.invoke('oc:nanogpt:models'),
@@ -590,6 +607,7 @@ const api: OpencodeApi = {
   pathForFile: (file) => webUtils.getPathForFile(file),
   exportChat: (defaultName, content) => ipcRenderer.invoke('oc:exportChat', defaultName, content),
   saveFile: (a) => ipcRenderer.invoke('oc:saveFile', a),
+  saveClipboardImage: (a) => ipcRenderer.invoke('oc:clipboard:saveImage', a),
   fs: {
     tree: (directory, path, depth) => ipcRenderer.invoke('oc:fs:tree', { directory, path, depth }),
     read: (directory, path) => ipcRenderer.invoke('oc:fs:read', { directory, path }),

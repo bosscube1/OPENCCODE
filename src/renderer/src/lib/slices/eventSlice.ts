@@ -15,7 +15,34 @@
  */
 
 import { classifyError, isTokenThroughputLimit } from '../rotation'
-import { saveLedger, record429, recordSuccess, recordFailure } from '../routing'
+import { saveLedger, record429, recordSuccess, recordFailure, recordTokens, nextAvailableAt } from '../routing'
+import { lastAssistantTokenTotal } from '../aggregate'
+import type { Ledger } from '../routing'
+import { FREE_PROVIDER_CAPS } from '../freeTier'
+import type { ErrorClass } from '../attempts'
+
+/**
+ * Replace a raw provider rate-limit message with the one fact the user can act on:
+ * when a model frees up again. Only for rate-limit classes — every other error's own
+ * message is more informative than a wait time would be.
+ *
+ * The pool is the ledger's own keys, i.e. models this install has actually used. A
+ * model never tried has no send history, so it could not have been the thing keeping
+ * failover from finding a route.
+ */
+function rateLimitedMessage(
+  errClass: ErrorClass,
+  fallback: string,
+  now: number,
+  ledger: Ledger
+): string {
+  if (errClass !== 'rpm-wait' && errClass !== 'rpd-drop') return fallback
+  const next = nextAvailableAt(Object.keys(ledger), ledger, FREE_PROVIDER_CAPS, now)
+  if (next === null || next.at <= now) return fallback
+  const minutes = Math.ceil((next.at - now) / 60_000)
+  const when = minutes < 60 ? `${minutes} min` : `${Math.round(minutes / 60)}h`
+  return `Every free model is rate-limited right now. Next available in ~${when} (${next.key}).`
+}
 import {
   sortMessages,
   upsertMessage,
@@ -196,7 +223,13 @@ export function createEventSlice(set: SetState, get: GetState): EventSlice {
             const latencyMs = Math.max(50, now - attempt.startedAt)
             clearActiveAttempt(sessionID)
             setLastSendStartTime(null)
-            setLedger(recordSuccess(getLedger(), `${attempt.providerID}/${attempt.modelID}`, latencyMs, now))
+            const modelKey = `${attempt.providerID}/${attempt.modelID}`
+            setLedger(recordSuccess(getLedger(), modelKey, latencyMs, now))
+            // TPM is the cap that actually binds on Google Flash (250K/min against a
+            // 20/day request allowance), so the token cost of the run has to land in
+            // the ledger or the router throttles on the wrong dimension entirely.
+            const spent = lastAssistantTokenTotal(get().messages)
+            if (spent > 0) setLedger(recordTokens(getLedger(), modelKey, spent, now))
             saveLedger(getLedger())
           }
           // R2: reset per-exchange retry counter ONLY on clean completion
@@ -262,7 +295,10 @@ export function createEventSlice(set: SetState, get: GetState): EventSlice {
 
           if (attempt) {
             if (errClass === 'rpm-wait' || errClass === 'rpd-drop') {
-              setLedger(record429(getLedger(), `${attempt.providerID}/${attempt.modelID}`, now, retryAfterMs))
+              setLedger(record429(getLedger(), `${attempt.providerID}/${attempt.modelID}`, now, retryAfterMs, {
+                daily: errClass === 'rpd-drop',
+                caps: FREE_PROVIDER_CAPS
+              }))
             } else {
               setLedger(recordFailure(getLedger(), `${attempt.providerID}/${attempt.modelID}`, now))
             }
@@ -286,7 +322,12 @@ export function createEventSlice(set: SetState, get: GetState): EventSlice {
                 attempt ? `${attempt.providerID}/${attempt.modelID}` : undefined,
                 failedProviderID,
               )
-              if (!failedOver) set({ busy: false, error: message })
+              if (!failedOver) {
+                // Failover found nothing. For a rate-limit class that means every
+                // candidate is capped or cooling, and the raw provider message says
+                // nothing about when to try again — so say when instead.
+                set({ busy: false, error: rateLimitedMessage(errClass, message, Date.now(), getLedger()) })
+              }
             })()
             return
           }

@@ -2,8 +2,9 @@
  * Every renderer -> main invoke channel. Channel names are fixed by CONTRACTS.md.
  * Handlers unwrap the SDK's `{ data, error }` fields result and throw a readable Error on failure.
  */
-import { writeFile } from 'node:fs/promises'
-import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { mkdir, readdir, stat, unlink, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import type { Agent, Message, Part, Provider, Session } from '@opencode-ai/sdk'
 import { getAuthorizedProviderIDs, getClient, getStatus, isAuthorizedProvider, restartServer, setEventDirectory, type ServerStatus } from './server'
 import { getPermissionConfig, setPermissionConfig, validatePermissionConfig, type PermissionConfig } from './configService'
@@ -32,8 +33,9 @@ import {
   type McpSnapshot
 } from './mcp'
 import type { AppSettingsController, AppSettingsResult } from './appSettings'
+import type { LiveWindowController } from './liveWindow'
 import { sendGeminiLive, startGeminiLive, stopGeminiLive, type GeminiLiveInput } from './geminiLive'
-import { saveLiveTranscript } from './liveTranscripts'
+import { saveLiveTranscript, revealTranscriptsFolder } from './liveTranscripts'
 import { markBalanceBilled, readCache, refreshCatalogs, type RefreshResult } from './nanogptConfig'
 import {
   fetchSubscriptionUsage,
@@ -82,6 +84,7 @@ export type NanogptGenerateResult = {
 export type RegisterIpcOptions = {
   appSettings?: Pick<AppSettingsController, 'get' | 'set'>
   onQuickSubmit?: (text: string) => void | Promise<void>
+  liveWindow?: Pick<LiveWindowController, 'show' | 'setAlwaysOnTop' | 'getWindow'>
 }
 
 /** Shape of every SDK call with the default `responseStyle: 'fields'`. */
@@ -122,6 +125,9 @@ const CHANNELS = [
   'oc:mcp:disconnect',
   'oc:mcp:auth',
   'oc:quick:submit',
+  'oc:liveWindow:open',
+  'oc:liveWindow:close',
+  'oc:liveWindow:setAlwaysOnTop',
   'oc:appSettings:get',
   'oc:appSettings:set',
   'oc:exportChat',
@@ -139,6 +145,7 @@ const CHANNELS = [
   'oc:live:start',
   'oc:live:stop',
   'oc:live:saveTranscript',
+  'oc:live:transcripts:reveal',
   'oc:nanogpt:models',
   'oc:nanogpt:refresh',
   'oc:nanogpt:usage',
@@ -162,7 +169,9 @@ const CHANNELS = [
   'oc:term:write',
   'oc:term:resize',
   'oc:term:kill',
-  'oc:openEditor'
+  'oc:openEditor',
+  'oc:pickFiles',
+  'oc:clipboard:saveImage'
 ] as const
 
 /** Sizes the image endpoint is asked for. An allowlist — `size` is forwarded to a paid API. */
@@ -173,6 +182,43 @@ const IMAGE_SIZES: ReadonlySet<string> = new Set([
 
 const MAX_IMAGE_PROMPT = 4000
 const MAX_IMAGE_COUNT = 4
+
+/** Decoded-byte cap for a pasted clipboard image — matches MAX_ATTACHMENT_BYTES in Composer.tsx. */
+const MAX_PASTED_IMAGE_BYTES = 5 * 1024 * 1024
+
+/** Extensions accepted for a pasted clipboard image. `svg` is deliberately excluded (script-capable). */
+const PASTED_IMAGE_EXTS: ReadonlySet<string> = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp'])
+
+/** How long a pasted-image file is kept before `saveClipboardImage` prunes it on next write. */
+const PASTED_IMAGE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+
+/** Monotonic counter so two pastes in the same millisecond never collide. */
+let pastedImageCounter = 0
+
+function pastedImagesDir(): string {
+  return join(app.getPath('userData'), 'pasted-images')
+}
+
+/** Best-effort deletion of pasted-image files older than PASTED_IMAGE_MAX_AGE_MS. Never throws. */
+async function prunePastedImages(dir: string): Promise<void> {
+  try {
+    const entries = await readdir(dir)
+    const cutoff = Date.now() - PASTED_IMAGE_MAX_AGE_MS
+    await Promise.all(
+      entries.map(async (name) => {
+        const full = join(dir, name)
+        try {
+          const info = await stat(full)
+          if (info.isFile() && info.mtimeMs < cutoff) await unlink(full)
+        } catch {
+          // best-effort: a single bad entry must never fail the paste
+        }
+      })
+    )
+  } catch {
+    // best-effort: pruning must never fail the paste
+  }
+}
 
 /**
  * Models with a generation currently in flight.
@@ -387,6 +433,43 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
     const [first] = result.filePaths
     return first ?? null
   })
+
+  ipcMain.handle('oc:pickFiles', async (event): Promise<string[]> => {
+    const owner = BrowserWindow.fromWebContents(event.sender)
+    const options: Electron.OpenDialogOptions = {
+      title: 'Attach files',
+      buttonLabel: 'Attach',
+      properties: ['openFile', 'multiSelections']
+    }
+    const result = owner
+      ? await dialog.showOpenDialog(owner, options)
+      : await dialog.showOpenDialog(options)
+    if (result.canceled) return []
+    return result.filePaths
+  })
+
+  ipcMain.handle(
+    'oc:clipboard:saveImage',
+    async (_event, argsArg: unknown): Promise<string> => {
+      const args = requireObject(argsArg, 'args')
+      const data = requireString(args.data, 'data')
+      const ext = requireString(args.ext, 'ext').toLowerCase()
+      if (!PASTED_IMAGE_EXTS.has(ext)) {
+        throw new Error(`Invalid IPC argument: ext must be one of ${[...PASTED_IMAGE_EXTS].join(', ')}.`)
+      }
+      const bytes = Buffer.from(data, 'base64')
+      if (bytes.byteLength > MAX_PASTED_IMAGE_BYTES) {
+        throw new Error(`Pasted image exceeds the ${MAX_PASTED_IMAGE_BYTES} byte limit.`)
+      }
+      const dir = pastedImagesDir()
+      await mkdir(dir, { recursive: true })
+      const filename = `paste-${Date.now()}-${++pastedImageCounter}.${ext}`
+      const filePath = join(dir, filename)
+      await writeFile(filePath, bytes)
+      await prunePastedImages(dir)
+      return filePath
+    }
+  )
 
   ipcMain.handle('oc:sessions:list', async (_event, directoryArg: unknown): Promise<Session[]> => {
     const directory = requireString(directoryArg, 'directory')
@@ -704,6 +787,25 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
     const text = requireString(textArg, 'text').trim()
     if (!options.onQuickSubmit) throw new Error('Quick Entry is not initialized.')
     await options.onQuickSubmit(text)
+  })
+
+  ipcMain.handle('oc:liveWindow:open', (): void => {
+    if (!options.liveWindow) throw new Error('The Gemini Live window is not initialized.')
+    options.liveWindow.show()
+  })
+
+  ipcMain.handle('oc:liveWindow:close', (): void => {
+    if (!options.liveWindow) throw new Error('The Gemini Live window is not initialized.')
+    const win = options.liveWindow.getWindow()
+    if (win && !win.isDestroyed()) win.close()
+  })
+
+  ipcMain.handle('oc:liveWindow:setAlwaysOnTop', (_event, onArg: unknown): void => {
+    if (!options.liveWindow) throw new Error('The Gemini Live window is not initialized.')
+    if (typeof onArg !== 'boolean') {
+      throw new Error('Invalid liveWindow.setAlwaysOnTop argument: on must be a boolean.')
+    }
+    options.liveWindow.setAlwaysOnTop(onArg)
   })
 
   ipcMain.handle('oc:appSettings:get', (): AppSettingsResult => {
@@ -1055,6 +1157,7 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
     }
     return saveLiveTranscript((args as { messages?: unknown }).messages)
   })
+  ipcMain.handle('oc:live:transcripts:reveal', (): void => revealTranscriptsFolder())
 
   /* ---------------------------------------------------------------- */
   /* Phase 1 — fs / git / terminal / editor deep-link (code surface)   */

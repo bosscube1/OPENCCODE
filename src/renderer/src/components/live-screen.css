@@ -11,3 +11,24 @@
 .live-screen__dot--reconnecting{background:var(--warn);box-shadow:0 0 0 4px color-mix(in srgb,var(--warn) 20%,transparent)}
 .live-screen__notice{color:var(--ok);font-size:12px}
 @media(max-width:800px){.live-screen{padding:28px}.live-screen__body{grid-template-columns:1fr}.live-screen__foot{flex-wrap:wrap}}
+.live-screen__handoffs{display:flex;gap:9px;flex-wrap:wrap;margin-top:9px}
+.live-screen__handoff{border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--fg-dim);padding:5px 9px;font:11px var(--mono);letter-spacing:.04em;cursor:pointer}
+.live-screen__handoff:hover:not(:disabled){color:var(--accent);border-color:var(--accent)}
+.live-screen__handoff:disabled{opacity:.5;cursor:default}
+.live-screen__message .live-screen__handoff{display:block;margin-top:8px}
+
+/* The copilot now lives in its own ~460px floating window, not a full-screen
+   takeover. Below this width the head row overflows (the Close button falls off
+   the right edge) and the hero block eats the viewport, so compact it. */
+@media(max-width:620px){
+  .live-screen{padding:16px;overflow-x:hidden}
+  .live-screen__head{flex-direction:column;gap:12px}
+  .live-screen__head-actions{flex-wrap:wrap}
+  .live-screen h1{font:22px var(--serif);margin:6px 0 4px}
+  .live-screen__head p{display:none}
+  .live-screen__body{margin-top:16px;gap:14px}
+  .live-screen__preview{min-height:180px}
+  .live-screen__conversation{min-height:220px;padding:12px}
+  .live-screen__foot{flex-wrap:wrap;margin-top:12px}
+  .live-screen__foot input{width:100%}
+}

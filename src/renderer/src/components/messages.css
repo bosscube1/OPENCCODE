@@ -1510,3 +1510,28 @@
   border-radius: var(--card-radius);
   transition: background 400ms ease;
 }
+
+/* Windowed transcript: control that mounts the previous slice of a long session. */
+.chat__loadolder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  margin: 0 0 14px;
+  padding: 9px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-dim);
+  font: 12px var(--mono);
+  cursor: pointer;
+}
+.chat__loadolder:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.chat__loadolder-count {
+  color: var(--fg-dim);
+  opacity: 0.7;
+}

@@ -7,6 +7,7 @@ export type TrayOptions = {
   onHide: () => void
   onNewChat: () => void
   onQuickEntry: () => void
+  onLiveScreen: () => void
   onQuit: () => void
 }
 
@@ -41,6 +42,7 @@ export function setupTray(options: TrayOptions): TrayController {
       { type: 'separator' },
       { label: 'New Chat', click: options.onNewChat },
       { label: 'Quick Entry', click: options.onQuickEntry },
+      { label: 'Gemini Live', click: options.onLiveScreen },
       { type: 'separator' },
       { label: 'Quit', click: options.onQuit }
     ]

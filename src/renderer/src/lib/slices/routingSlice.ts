@@ -10,7 +10,8 @@
 import { isAgentModel } from '../models'
 import { savePrefs, type RoutingMode } from '../prefs'
 import { isFreeModel } from '../freeTier'
-import { selectModel, DEFAULT_PROVIDER_CAPS, parseModelKey } from '../routing'
+import { selectModel, parseModelKey } from '../routing'
+import { FREE_PROVIDER_CAPS } from '../freeTier'
 import { getLedger } from './attemptMachine'
 import type { AppState, SetState, GetState } from './types'
 
@@ -23,15 +24,12 @@ export type RoutingSlice = Pick<
   | 'modelID'
   | 'pinnedProviderID'
   | 'pinnedModelID'
-  | 'autoRotate'
   | 'modelPool'
-  | 'stickyModel'
   | 'routingMode'
   | 'showPaidModels'
   | 'setModel'
   | 'revertToPinned'
   | 'toggleAutoRotate'
-  | 'toggleStickyModel'
   | 'setRoutingMode'
   | 'setShowPaidModels'
   | 'setModelPool'
@@ -47,45 +45,41 @@ export function createRoutingSlice(set: SetState, get: GetState): RoutingSlice {
     modelID: null,
     pinnedProviderID: null,
     pinnedModelID: null,
-    autoRotate: false,
     modelPool: null,
-    stickyModel: false,
     routingMode: 'failover' as RoutingMode,
     showPaidModels: false,
 
+    /**
+     * Toggles auto model-switching. This drives `routingMode` directly — the only value any
+     * failover gate reads. It previously flipped a separate `autoRotate` boolean that no gate
+     * consulted and that `savePrefs` immediately overwrote, so the badge could read "on" while
+     * `locked` suppressed every failover.
+     *
+     * Off maps to `locked`. On maps to `failover` rather than `auto`, because `failover` is what
+     * the UI copy has always described ("cycles models on 429") and it never overwrites the
+     * user's pinned pick; `auto` remains reachable from the Settings radio.
+     */
     toggleAutoRotate(): void {
-      const next = !get().autoRotate
-      set({ autoRotate: next })
-      const { directory, providerID, modelID, theme, modelPool, stickyModel } = get()
-      savePrefs({ directory, providerID, modelID, autoRotate: next, theme, modelPool, stickyModel })
-    },
-
-    toggleStickyModel(): void {
-      const next = !get().stickyModel
-      set({ stickyModel: next })
-      const { directory, providerID, modelID, autoRotate, theme, modelPool, routingMode, showPaidModels } = get()
-      savePrefs({ directory, providerID, modelID, autoRotate, theme, modelPool, stickyModel: next, routingMode, showPaidModels })
+      const mode: RoutingMode = get().routingMode === 'locked' ? 'failover' : 'locked'
+      get().setRoutingMode(mode)
     },
 
     setRoutingMode(mode: RoutingMode): void {
-      // Keep legacy booleans in sync for read-only consumers during transition
-      const autoRotate = mode === 'auto'
-      const stickyModel = mode === 'failover'
-      set({ routingMode: mode, autoRotate, stickyModel })
+      set({ routingMode: mode })
       const { directory, providerID, modelID, theme, modelPool, showPaidModels } = get()
-      savePrefs({ directory, providerID, modelID, autoRotate, theme, modelPool, stickyModel, routingMode: mode, showPaidModels })
+      savePrefs({ directory, providerID, modelID, theme, modelPool, routingMode: mode, showPaidModels })
     },
 
     setShowPaidModels(v: boolean): void {
       set({ showPaidModels: v })
-      const { directory, providerID, modelID, autoRotate, theme, modelPool, stickyModel, routingMode } = get()
-      savePrefs({ directory, providerID, modelID, autoRotate, theme, modelPool, stickyModel, routingMode, showPaidModels: v })
+      const { directory, providerID, modelID, theme, modelPool, routingMode } = get()
+      savePrefs({ directory, providerID, modelID, theme, modelPool, routingMode, showPaidModels: v })
     },
 
     setModelPool(pool: string[] | null): void {
       set({ modelPool: pool })
-      const { directory, providerID, modelID, autoRotate, theme, stickyModel } = get()
-      savePrefs({ directory, providerID, modelID, autoRotate, theme, modelPool: pool, stickyModel })
+      const { directory, providerID, modelID, theme, routingMode } = get()
+      savePrefs({ directory, providerID, modelID, theme, modelPool: pool, routingMode })
     },
 
     rotateToNextFreeModel(exclude?: string, excludeProviderID?: string): { providerID: string; modelID: string; providerName: string; modelName: string } | null {
@@ -110,7 +104,7 @@ export function createRoutingSlice(set: SetState, get: GetState): RoutingSlice {
         }
       }
 
-      const chosenKey = selectModel(modelPool, getLedger(), DEFAULT_PROVIDER_CAPS, Date.now(), {
+      const chosenKey = selectModel(modelPool, getLedger(), FREE_PROVIDER_CAPS, Date.now(), {
         sticky: false,
         current: currentP && currentM ? `${currentP}/${currentM}` : null,
         available,
@@ -141,8 +135,8 @@ export function createRoutingSlice(set: SetState, get: GetState): RoutingSlice {
     setModel(providerID: string, modelID: string): void {
       // Setting a model updates BOTH pinned (user intent) and effective (current run)
       set({ providerID, modelID, pinnedProviderID: providerID, pinnedModelID: modelID })
-      const { directory, autoRotate, theme, modelPool, stickyModel, routingMode, showPaidModels } = get()
-      savePrefs({ directory, providerID, modelID, autoRotate, theme, modelPool, stickyModel, routingMode, showPaidModels })
+      const { directory, theme, modelPool, routingMode, showPaidModels } = get()
+      savePrefs({ directory, providerID, modelID, theme, modelPool, routingMode, showPaidModels })
     },
 
     revertToPinned(): void {

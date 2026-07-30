@@ -3,6 +3,7 @@ import type { JSX } from 'react'
 import { useStore } from '../lib/store'
 import { sessionCost, contextUsed, contextLimit } from '../lib/aggregate'
 import { formatCost, formatTokens } from '../lib/format'
+import { isAutoRoutingActive } from '../lib/routing'
 import { SettingsPanel } from './SettingsPanel'
 import type { AppState } from '../lib/slices/types'
 
@@ -43,7 +44,8 @@ export function StatusBar(): JSX.Element {
   const activeSessionID = useStore((s) => s.activeSessionID)
   const busy = useStore((s) => s.busy)
   const pending = useStore((s) => s.permissions.length)
-  const autoRotate = useStore((s) => s.autoRotate)
+  // Derived from routingMode — see isAutoRoutingActive.
+  const autoRotate = useStore((s) => isAutoRoutingActive(s.routingMode))
   const theme = useStore((s) => s.theme)
   const setTheme = useStore((s) => s.setTheme)
   const branch = useStore((s) => s.branch)

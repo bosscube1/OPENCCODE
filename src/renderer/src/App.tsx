@@ -11,13 +11,14 @@ import { StatusBar } from './components/StatusBar'
 import { ArtifactsPanel } from './components/ArtifactsPanel'
 import { ProjectView } from './components/ProjectView'
 import { ImagesView } from './components/ImagesView'
-import { LiveScreenAssistant } from './components/LiveScreenAssistant'
 import { FileTree } from './components/FileTree'
 import { EditorPanel } from './components/EditorPanel'
 import { GitPanel } from './components/GitPanel'
 import { ChangesPanel } from './components/ChangesPanel'
 import { TerminalPanel } from './components/TerminalPanel'
 import { CommandPalette } from './components/CommandPalette'
+import { ShortcutsHelp } from './components/ShortcutsHelp'
+import { TipBar } from './components/TipBar'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { useStore } from './lib/store'
 import type { AppState } from './lib/slices/types'
@@ -129,8 +130,8 @@ export function App(): JSX.Element {
 
   const [width, setWidth] = useState<number>(() => readStoredWidth())
   const [restarting, setRestarting] = useState(false)
+  const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false)
   const [restartError, setRestartError] = useState<string | null>(null)
-  const [liveScreenOpen, setLiveScreenOpen] = useState(false)
 
   const widthRef = useRef(width)
   const draggingRef = useRef(false)
@@ -214,13 +215,29 @@ export function App(): JSX.Element {
 
   /* ---- global shortcuts ------------------------------------------------- */
   useEffect(() => {
+    // TODO(shortcuts registry): lib/shortcuts.ts is the intended future source of truth
+    // for these bindings — this handler still owns the actual key matching for now.
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         window.dispatchEvent(new Event(CLOSE_PROVIDERS_EVENT))
         return
       }
+      // F1 has no modifier, so it must be handled before the ctrl/meta guard below
+      // (which early-returns for every unmodified key) or it will never fire.
+      if (e.key === 'F1' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        e.preventDefault()
+        setShortcutsHelpOpen((open) => !open)
+        return
+      }
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return
       const key = e.key.toLowerCase()
+      if (e.shiftKey && key === 'l') {
+        // Ctrl+Shift+L opens the floating Gemini Live copilot window. Checked before the
+        // plain-letter branches below so a future unshifted 'l' binding can't shadow it.
+        e.preventDefault()
+        void window.api.liveWindow.open()
+        return
+      }
       if (key === 'n') {
         e.preventDefault()
         if (useStore.getState().directory) void useStore.getState().newSession()
@@ -246,6 +263,9 @@ export function App(): JSX.Element {
       } else if (key === ',') {
         e.preventDefault()
         window.dispatchEvent(new Event(TOGGLE_SETTINGS_EVENT))
+      } else if (key === '/') {
+        e.preventDefault()
+        setShortcutsHelpOpen((open) => !open)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -330,15 +350,13 @@ export function App(): JSX.Element {
     panelTab ?? (activeArtifactID !== null ? 'artifacts' : null)
   const panelOpen = activeView === 'chats' && effectivePanelTab !== null
 
-  if (liveScreenOpen) return <LiveScreenAssistant onClose={() => setLiveScreenOpen(false)} />
-
   return (
     <div
       className={panelOpen ? 'app app--panel' : 'app'}
       style={{ '--sidebar-w': `${width}px` } as CSSProperties}
     >
       <div className="app__sidebar">
-        <Sidebar onOpenLiveScreen={() => setLiveScreenOpen(true)} />
+        <Sidebar onOpenLiveScreen={() => { void window.api.liveWindow.open() }} />
       </div>
 
       <div
@@ -370,6 +388,10 @@ export function App(): JSX.Element {
             </button>
           </div>
         )}
+        {/* Below the error banner deliberately: a failure the user needs to act on
+            outranks onboarding. TipBar renders null once tips are off or all
+            acknowledged, so this costs nothing after the first few sessions. */}
+        <TipBar />
         {/* Keyed on the view so switching away from a crashed one remounts the
             boundary — without this the error state outlives the view that threw. */}
         <ErrorBoundary
@@ -452,6 +474,7 @@ export function App(): JSX.Element {
       )}
 
       <CommandPalette />
+      <ShortcutsHelp open={shortcutsHelpOpen} onClose={() => setShortcutsHelpOpen(false)} />
       <StatusBar />
     </div>
   )

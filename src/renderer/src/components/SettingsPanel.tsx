@@ -5,6 +5,7 @@ import { useStore, errText } from '../lib/store'
 import { FREE_ROUTING_CANDIDATES } from '../lib/rotation'
 import { formatTokens, relativeTime } from '../lib/format'
 import { PERMISSION_PRESETS, summarizePermission, type PermissionPreset } from '../lib/permissionPresets'
+import { TIPS, loadTipsPrefs, saveTipsPrefs, setTipsEnabled, resetTips, unacknowledgedTipCount, type TipsPrefs } from '../lib/tips'
 import { McpPanel } from './McpPanel'
 import { RoutingPanel } from './RoutingPanel'
 
@@ -216,6 +217,8 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
   const updateAppSettings = useStore((s) => s.updateAppSettings)
   const [shortcutDraft, setShortcutDraft] = useState(appSettings.globalShortcut)
   const [applyingShortcut, setApplyingShortcut] = useState(false)
+  // Tips prefs are renderer-local localStorage state, not main-process appSettings
+  const [tipsPrefs, setTipsPrefs] = useState<TipsPrefs>(() => loadTipsPrefs())
 
   useEffect(() => {
     setShortcutDraft(appSettings.globalShortcut)
@@ -228,6 +231,11 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
     void updateAppSettings({ globalShortcut }).finally(() => {
       setApplyingShortcut(false)
     })
+  }
+
+  const applyTipsPrefs = (next: TipsPrefs): void => {
+    saveTipsPrefs(next)
+    setTipsPrefs(next)
   }
 
   if (!open) return null
@@ -318,6 +326,33 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
             <h2 className="providers__group-title">NanoGPT Usage</h2>
             <div className="providers__card">
               <NanoUsageCard />
+            </div>
+          </section>
+
+          <section>
+            <h2 className="providers__group-title">Tips</h2>
+            <div className="providers__card">
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={tipsPrefs.enabled}
+                  onChange={(event) => applyTipsPrefs(setTipsEnabled(tipsPrefs, event.target.checked))}
+                />
+                Show new-user tips
+              </label>
+              <p style={{ fontSize: '11.5px', color: 'var(--fg-dim)', margin: '4px 0 8px' }}>
+                Tips appear one at a time above the chat and disappear once acknowledged.
+              </p>
+              <button
+                type="button"
+                className="providers__key-btn"
+                onClick={() => applyTipsPrefs(resetTips(tipsPrefs))}
+              >
+                Show all tips again
+              </button>
+              <p style={{ fontSize: '11.5px', color: 'var(--fg-dim)', margin: '6px 0 0' }}>
+                {unacknowledgedTipCount(tipsPrefs)} of {TIPS.length} tips not yet seen
+              </p>
             </div>
           </section>
 

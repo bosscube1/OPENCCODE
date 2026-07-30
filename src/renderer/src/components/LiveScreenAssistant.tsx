@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
 import { appendTranscriptChunk, type LiveTranscriptEntry } from '../lib/liveTranscript'
-import { DEFAULT_LIVE_PREFS, LIVE_VOICES, loadLivePrefs, saveLivePrefs, type LivePrefs } from '../lib/prefs'
+import { collectProjectContext } from '../lib/liveContext'
+import { DEFAULT_LIVE_PREFS, LIVE_VOICES, loadLivePrefs, loadPrefs, saveLivePrefs, type LivePrefs } from '../lib/prefs'
 import './live-screen.css'
 
 type LiveStatus = 'idle' | 'connecting' | 'live' | 'reconnecting' | 'error'
@@ -20,8 +21,9 @@ function base64ToInt16(value: string): Int16Array {
   return new Int16Array(bytes.buffer)
 }
 
-export function LiveScreenAssistant({ onClose }: { onClose: () => void }): JSX.Element {
+export function LiveScreenAssistant({ onClose }: { onClose?: () => void }): JSX.Element {
   const [status, setStatus] = useState<LiveStatus>('idle')
+  const [pinned, setPinned] = useState(true)
   const [transcript, setTranscript] = useState<LiveTranscriptEntry[]>([])
   const [prompt, setPrompt] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -240,10 +242,13 @@ export function LiveScreenAssistant({ onClose }: { onClose: () => void }): JSX.E
 
   const close = (): void => {
     if (savingTranscript.current) return
+    // Standalone window (no onClose prop): close this window instead of unmounting
+    // back to a parent that doesn't exist.
+    const finish = onClose ?? (() => window.close())
     const entries = transcriptRef.current.filter((entry) => entry.role !== 'system')
     stop()
     if (entries.length === 0) {
-      onClose()
+      finish()
       return
     }
     // Auto-save the conversation, show where it landed, then unmount.
@@ -253,7 +258,58 @@ export function LiveScreenAssistant({ onClose }: { onClose: () => void }): JSX.E
       (path) => setNotice(`Transcript saved to ${path}`),
       () => setNotice('Transcript could not be saved.')
     ).finally(() => {
-      window.setTimeout(onClose, 1500)
+      window.setTimeout(finish, 1500)
+    })
+  }
+
+  /* ---- handing work between Gemini and the coding agent ------------------ */
+
+  // Reuses the Quick Entry path: `quick.submit` already forwards text to the main
+  // window (creating/restoring/focusing it and waiting on load) where it lands in
+  // the composer. No new main-process code is needed to reach the agent.
+  const sendToChat = (text: string, label: string): void => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    window.api.quick.submit(trimmed).then(
+      () => setNotice(`${label} sent to chat.`),
+      (cause: unknown) => setNotice(cause instanceof Error ? cause.message : `${label} could not be sent to chat.`)
+    )
+  }
+
+  const sendTranscriptToChat = (): void => {
+    const entries = transcriptRef.current.filter((entry) => entry.role !== 'system')
+    if (entries.length === 0) {
+      setNotice('Nothing to send yet.')
+      return
+    }
+    const body = entries
+      .map((entry) => `${entry.role === 'gemini' ? 'Gemini' : 'Me'}: ${entry.text}`)
+      .join('\n')
+    sendToChat(`From my Gemini Live screen session:\n\n${body}`, 'Transcript')
+  }
+
+  // The copilot window has no store, but prefs are same-origin localStorage and the
+  // fs/git bridge is on window.api — so repo context needs no extra IPC surface.
+  const describeProject = (): void => {
+    if (statusRef.current !== 'live') return
+    const { directory } = loadPrefs()
+    if (!directory) {
+      setNotice('No project folder is open in the main window.')
+      return
+    }
+    setNotice('Reading project context…')
+    void collectProjectContext(window.api, directory).then((text) => {
+      window.api.live.send({ text })
+      addTranscript('system', 'Sent the current project context to Gemini.')
+      setNotice(null)
+    })
+  }
+
+  const togglePinned = (): void => {
+    setPinned((current) => {
+      const next = !current
+      void window.api.liveWindow.setAlwaysOnTop(next)
+      return next
     })
   }
 
@@ -268,14 +324,14 @@ export function LiveScreenAssistant({ onClose }: { onClose: () => void }): JSX.E
   const busy = status === 'live' || status === 'connecting' || status === 'reconnecting'
 
   return <div className="live-screen" role="dialog" aria-modal="true">
-    <div className="live-screen__head"><div><span className="live-screen__eyebrow">{settings.model.toUpperCase()} LIVE</span><h1>Screen copilot</h1><p>Share a window, speak naturally, and get live visual help.</p></div><div className="live-screen__head-actions"><button className="live-screen__close" onClick={() => setSettingsOpen((open) => !open)} aria-expanded={settingsOpen}>Settings</button><button className="live-screen__close" onClick={close}>Close</button></div></div>
+    <div className="live-screen__head"><div><span className="live-screen__eyebrow">{settings.model.toUpperCase()} LIVE</span><h1>Screen copilot</h1><p>Share a window, speak naturally, and get live visual help.</p></div><div className="live-screen__head-actions"><button className="live-screen__close" onClick={togglePinned} aria-pressed={pinned} title={pinned ? 'Unpin from always-on-top' : 'Keep this window on top of others'}>{pinned ? 'Unpin' : 'Pin'}</button><button className="live-screen__close" onClick={() => void window.api.live.revealTranscripts()} title="Open the saved transcripts folder">Transcripts</button><button className="live-screen__close" onClick={() => setSettingsOpen((open) => !open)} aria-expanded={settingsOpen}>Settings</button><button className="live-screen__close" onClick={close}>Close</button></div></div>
     {settingsOpen && <div className="live-screen__settings">
       <label className="live-screen__field">Voice<select value={settings.voice} onChange={(event) => updateSettings({ voice: event.target.value })}>{LIVE_VOICES.map((voice) => <option key={voice} value={voice}>{voice}</option>)}</select></label>
       <label className="live-screen__field">Model<input value={settings.model} onChange={(event) => updateSettings({ model: event.target.value })} placeholder={DEFAULT_LIVE_PREFS.model} spellCheck={false} /></label>
       <label className="live-screen__field live-screen__field--wide">System prompt<textarea value={settings.systemInstruction} onChange={(event) => updateSettings({ systemInstruction: event.target.value })} rows={3} /></label>
       <p className="live-screen__settings-note">Applied on connect — changes mid-session take effect after a stop and restart.</p>
     </div>}
-    <div className="live-screen__body"><div className="live-screen__preview"><canvas ref={canvas} /><div className="live-screen__preview-label"><span className={`live-screen__dot live-screen__dot--${status}`} />{status === 'live' ? (muted ? 'Screen live — mic muted' : 'Screen + microphone live') : status === 'reconnecting' ? 'Reconnecting…' : status === 'connecting' ? 'Connecting…' : 'Screen preview'}</div></div><div className="live-screen__conversation"><div className="live-screen__messages" aria-live="polite">{transcript.length ? transcript.map((entry) => <p className={`live-screen__message live-screen__message--${entry.role}`} key={entry.id}><strong>{entry.role === 'gemini' ? 'Gemini' : entry.role === 'you' ? 'You' : 'Status'}</strong>{entry.text}</p>) : <p className="live-screen__muted">Your visual conversation will appear here.</p>}</div><div className="live-screen__controls"><button className={`live-screen__mute${muted ? ' live-screen__mute--on' : ''}`} onClick={toggleMuted} aria-pressed={muted} disabled={status !== 'live'} title={muted ? 'Unmute microphone' : 'Mute microphone'}>{muted ? 'Unmute' : 'Mute'}</button><input value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') sendPrompt() }} placeholder="Ask about the screen…" disabled={status !== 'live'} /><button onClick={sendPrompt} disabled={status !== 'live'}>Send</button></div></div></div>
+    <div className="live-screen__body"><div className="live-screen__preview"><canvas ref={canvas} /><div className="live-screen__preview-label"><span className={`live-screen__dot live-screen__dot--${status}`} />{status === 'live' ? (muted ? 'Screen live — mic muted' : 'Screen + microphone live') : status === 'reconnecting' ? 'Reconnecting…' : status === 'connecting' ? 'Connecting…' : 'Screen preview'}</div></div><div className="live-screen__conversation"><div className="live-screen__messages" aria-live="polite">{transcript.length ? transcript.map((entry) => <p className={`live-screen__message live-screen__message--${entry.role}`} key={entry.id}><strong>{entry.role === 'gemini' ? 'Gemini' : entry.role === 'you' ? 'You' : 'Status'}</strong>{entry.text}{entry.role === 'gemini' && <button type="button" className="live-screen__handoff" onClick={() => sendToChat(entry.text, 'Answer')} title="Send this answer to the OpenCode chat as a prompt">→ Chat</button>}</p>) : <p className="live-screen__muted">Your visual conversation will appear here.</p>}</div><div className="live-screen__controls"><button className={`live-screen__mute${muted ? ' live-screen__mute--on' : ''}`} onClick={toggleMuted} aria-pressed={muted} disabled={status !== 'live'} title={muted ? 'Unmute microphone' : 'Mute microphone'}>{muted ? 'Unmute' : 'Mute'}</button><input value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') sendPrompt() }} placeholder="Ask about the screen…" disabled={status !== 'live'} /><button onClick={sendPrompt} disabled={status !== 'live'}>Send</button></div><div className="live-screen__handoffs"><button type="button" className="live-screen__handoff" onClick={describeProject} disabled={status !== 'live'} title="Read the open project's git state and tell Gemini what you are working on">Send project context</button><button type="button" className="live-screen__handoff" onClick={sendTranscriptToChat} title="Send this whole conversation to the OpenCode chat as a prompt">Send transcript → Chat</button></div></div></div>
     <div className="live-screen__foot"><span className="live-screen__provider">Uses the encrypted Google key from Providers</span><button className="live-screen__start" onClick={busy ? stop : () => void connect()}>{status === 'live' || status === 'reconnecting' ? 'Stop sharing' : status === 'connecting' ? 'Cancel' : 'Start screen share'}</button>{error && <span className="live-screen__error">{error}</span>}{notice && <span className="live-screen__notice">{notice}</span>}</div>
   </div>
 }
