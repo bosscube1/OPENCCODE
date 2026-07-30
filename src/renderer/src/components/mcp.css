@@ -15,6 +15,16 @@
   gap: 8px;
 }
 
+/* The intro row carries two buttons since the catalog landed; at panel width they
+   overflow the right edge and the second one is clipped off-screen. */
+.mcp__intro {
+  flex-wrap: wrap;
+}
+
+.mcp__intro p {
+  min-width: 0;
+}
+
 .mcp__intro p {
   flex: 1;
   margin: 0;

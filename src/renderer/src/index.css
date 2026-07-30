@@ -1961,6 +1961,9 @@ body.app--resizing {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
+  /* Count + confirm text + two buttons do not fit the sidebar on one line — without
+     wrapping, the confirmation question is what gets ellipsised away. */
+  flex-wrap: wrap;
   gap: 8px;
   padding: 6px 12px;
   margin: 0 6px 6px;

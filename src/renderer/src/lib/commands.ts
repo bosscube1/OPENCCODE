@@ -146,7 +146,15 @@ export function getMatchingCommands(query: string, serverCommands: ServerCommand
     }
   }))
 
-  const allCommands = [...SLASH_COMMANDS, ...mappedServerCommands]
+  // A project can register a server command whose name collides with a built-in — `/init`
+  // is registered by opencode itself and ships here too. Both used to reach the menu, which
+  // rendered the same entry twice under one React key. The local command wins: it carries an
+  // `action`, so it is the one that actually does something when picked.
+  const localNames = new Set(SLASH_COMMANDS.map((cmd) => cmd.name))
+  const allCommands = [
+    ...SLASH_COMMANDS,
+    ...mappedServerCommands.filter((cmd) => !localNames.has(cmd.name))
+  ]
 
   return allCommands.filter((cmd) => {
     return (
