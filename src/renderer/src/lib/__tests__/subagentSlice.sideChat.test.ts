@@ -71,7 +71,9 @@ describe('startSideChat', () => {
     const create = vi.fn(async (_d: string, title?: string) =>
       child('side-1', title ?? '')
     )
-    const prompt = vi.fn(async () => undefined)
+    // Typed arg — `mock.calls[0][0]` is asserted below, and a zero-arg mock types
+    // `calls` as an empty tuple.
+    const prompt = vi.fn(async (_args: { sessionID: string; text: string }) => undefined)
     mockApi.mockReturnValue({
       sessions: { create },
       prompt,
