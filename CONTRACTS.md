@@ -46,7 +46,9 @@ Use `promptAsync` (fire-and-forget) — the reply arrives as SSE events. Never `
 
 ```ts
 type Session = { id, projectID, directory, parentID?, title, version,
-                 time: { created, updated }, share?: { url } }
+                 time: { created, updated }, share?: { url },
+                 revert?: { messageID, partID?, snapshot?, diff? } }
+// `revert` is present only while the session is in a reverted state; it clears on unrevert.
 
 type UserMessage      = { id, sessionID, role: 'user', time: { created }, agent,
                           model: { providerID, modelID } }
@@ -108,13 +110,23 @@ Every handler returns `Promise<T>` and **throws** on failure (renderer catches).
 'oc:status'            () => { running: boolean; url: string | null; streamConnected: boolean; error?: string }
 'oc:restart'           () => { running: boolean; url: string | null; streamConnected: boolean; error?: string }
 'oc:pickDirectory'     () => string | null              // native folder dialog
+'oc:pickFiles'         () => string[]                   // native multi-select file dialog; [] on cancel
+'oc:clipboard:saveImage' (args: { data: string; ext: string }) => string
+                        // persists a pasted clipboard image (base64 data, ext allowlisted
+                        // to png|jpg|jpeg|gif|webp — no svg) under
+                        // userData/pasted-images/paste-<epochMs>-<counter>.<ext>. Main
+                        // generates the filename; a 5 MiB decoded-byte cap is enforced.
+                        // Prunes files older than 7 days on each write (best-effort).
 'oc:sessions:list'     (directory: string) => Session[]
 'oc:sessions:create'   (directory: string, title?: string) => Session
 'oc:sessions:delete'   (directory: string, id: string) => void
 'oc:messages:list'     (directory: string, sessionID: string) => { info: Message; parts: Part[] }[]
 'oc:prompt'            (args: { directory: string; sessionID: string;
                                 providerID: string; modelID: string; text: string;
-                                parts?: PromptPart[] }) => void
+                                parts?: PromptPart[]; tools?: Record<string, boolean>;
+                                agent?: string }) => void
+                       // tools: per-request tool policy (validated allowlist charset).
+                       // agent: agent-name override (1-64 [A-Za-z0-9._-]); omitted = default.
 'oc:abort'             (directory: string, sessionID: string) => void
 'oc:providers'         () => { providers: Provider[]; default: Record<string, string> }
 'oc:permission:reply'  (args: { directory: string; sessionID: string; permissionID: string;
@@ -154,6 +166,20 @@ Every handler returns `Promise<T>` and **throws** on failure (renderer catches).
                                  messageID: string }) => void
                         // reverts server to before messageID; ALSO restores
                         // workspace file snapshots (renderer confirms first).
+'oc:messages:unrevert'  (args: { directory: string; sessionID: string }) => Session
+                        // restores all reverted messages; response is the session
+                        // with `revert` cleared (renderer upserts it directly).
+'oc:agents:list'        (directory: string) => Agent[]
+                        // the server's agent registry; the composer picker filters
+                        // to mode 'primary' | 'all'.
+'oc:config:permission:get' (directory: string) => PermissionConfig
+                        // the resolved `permission` key of the project config
+                        // ({} when unset).
+'oc:config:permission:set' (args: { directory: string; permission: PermissionConfig }) => boolean
+                        // merges ONLY the permission key. Strictly validated in main
+                        // (known keys, ask|allow|deny; bash may be a pattern map).
+                        // Uses config.update; on failure rewrites opencode.json
+                        // atomically + restarts the server (returns true).
 'oc:search:chats'       (directory: string, query: string) => ChatSearchHit[]
                         // global chat-content search, runs in main with a
                         // bounded (concurrency 4) message-fetch pool + LRU cache.
@@ -183,8 +209,31 @@ Every handler returns `Promise<T>` and **throws** on failure (renderer catches).
 'oc:nanogpt:images:delete' (id: string) => void
 
 // --- Gemini Live (WebRTC-style realtime audio/video) ---
-'oc:live:start'  () => void                       // opens gemini-3.1-flash-live-preview session
+'oc:live:start'  (config?: GeminiLiveConfig) => void
+                        // opens a Live session (defaults: model
+                        // gemini-3.1-flash-live-preview, voice Kore). config is
+                        // validated in main (voice allowlist, model charset,
+                        // systemInstruction ≤4000 chars); bad values throw.
 'oc:live:stop'   () => void
+'oc:live:saveTranscript' (args: { messages: LiveTranscriptMessage[] }) => string
+                        // writes userData/live-transcripts/<timestamp>.md and
+                        // returns the path. Bounds: ≤5000 messages, ≤32k chars each.
+'oc:live:transcripts:reveal' () => void
+                        // opens userData/live-transcripts in the OS file manager,
+                        // creating it if absent. Takes NO renderer-supplied path —
+                        // the directory is derived in main, so there is nothing to
+                        // validate and no way to point it at an arbitrary location.
+
+// --- Gemini Live copilot window (a separate floating BrowserWindow) ---
+'oc:liveWindow:open'           () => void
+                        // shows and focuses the floating `#/live` window, creating
+                        // it on demand. The copilot runs in its own window so chat
+                        // keeps running behind it; because geminiLive.ts keys every
+                        // session by webContents id, that window owns its own Live
+                        // session and closing it tears the session down.
+'oc:liveWindow:close'          () => void
+'oc:liveWindow:setAlwaysOnTop' (on: boolean) => void
+                        // no-op when the window does not exist.
 ```
 
 ### Listener channels (renderer -> main, `ipcMain.on`)
@@ -211,6 +260,20 @@ and never read back in the clear across the bridge.
 ```ts
 export type ChatSearchHit = {
   sessionID: string; title: string; messageID: string; snippet: string; time: number
+}
+```
+
+`PermissionConfig` (exported from `src/preload/index.ts`, importable by the renderer) — the
+validated shape accepted by `oc:config:permission:set`:
+
+```ts
+export type PermissionLevel = 'ask' | 'allow' | 'deny'
+export type PermissionConfig = {
+  edit?: PermissionLevel
+  bash?: PermissionLevel | Record<string, PermissionLevel>
+  webfetch?: PermissionLevel
+  doom_loop?: PermissionLevel
+  external_directory?: PermissionLevel
 }
 ```
 
@@ -265,7 +328,7 @@ export type UpdateStatus =
 
 ```ts
 'oc:event'                 (event: { type: string; properties: any })   // every SSE event, verbatim
-'oc:live:message'          (event: GeminiLiveEvent)                      // Gemini Live message/error/closed
+'oc:live:message'          (event: GeminiLiveEvent)                      // Gemini Live message/error/closed/reconnecting
 'oc:server'                (status: { running: boolean; url: string | null; streamConnected: boolean; error?: string })
 //   `running` means the HTTP server answers. `streamConnected` means the SSE
 //   subscription is live. They are independent: the stream can drop and
@@ -282,6 +345,7 @@ export interface OpencodeApi {
   status(): Promise<ServerStatus>
   restart(): Promise<ServerStatus>
   pickDirectory(): Promise<string | null>
+  pickFiles(): Promise<string[]>
   sessions: {
     list(directory: string): Promise<Session[]>
     create(directory: string, title?: string): Promise<Session>
@@ -313,9 +377,18 @@ export interface OpencodeApi {
     auth(directory: string, name: string): Promise<McpSnapshot>
   }
   quick: { submit(text: string): Promise<void> }
+  liveWindow: {
+    open(): Promise<void>
+    close(): Promise<void>
+    setAlwaysOnTop(on: boolean): Promise<void>
+  }
   appSettings: {
     get(): Promise<AppSettingsResult>
     set(patch: Partial<AppSettings>): Promise<AppSettingsResult>
+  }
+  config: {
+    getPermission(directory: string): Promise<PermissionConfig>
+    setPermission(a: { directory: string; permission: PermissionConfig }): Promise<boolean>
   }
   keys: {
     list(): Promise<KeyRow[]>                                   // masked rows only
@@ -324,10 +397,12 @@ export interface OpencodeApi {
     test(providerID: string): Promise<{ ok: boolean; status?: number; detail?: string }>
   }
   live: {
-    start(): Promise<void>
+    start(config?: GeminiLiveConfig): Promise<void>
     send(input: GeminiLiveInput): void
     stop(): Promise<void>
     onMessage(cb: (event: GeminiLiveEvent) => void): () => void
+    saveTranscript(a: { messages: LiveTranscriptMessage[] }): Promise<string> // -> saved file path
+    revealTranscripts(): Promise<void>
   }
   nanogpt: {
     /** Cached catalogues — cheap, synchronous in main, no network. */
@@ -343,14 +418,18 @@ export interface OpencodeApi {
   }
   messages(directory: string, sessionID: string): Promise<MessageWithParts[]>
   revertMessage(a: { directory: string; sessionID: string; messageID: string }): Promise<void>
+  unrevertMessage(a: { directory: string; sessionID: string }): Promise<Session>
+  agents(directory: string): Promise<Agent[]>
   searchChats(directory: string, query: string): Promise<ChatSearchHit[]>
-  prompt(a: { directory: string; sessionID: string; providerID: string; modelID: string; text: string; parts?: PromptPart[] }): Promise<void>
+  prompt(a: { directory: string; sessionID: string; providerID: string; modelID: string; text: string; parts?: PromptPart[]; tools?: Record<string, boolean>; agent?: string }): Promise<void>
   abort(directory: string, sessionID: string): Promise<void>
   providers(): Promise<ProvidersResult>
   replyPermission(a: { directory: string; sessionID: string; permissionID: string; response: PermissionResponse }): Promise<void>
   openExternal(url: string): Promise<void>
   exportChat(defaultName: string, content: string): Promise<boolean>
   saveFile(a: { defaultName: string; content: string }): Promise<boolean>
+  pickFiles(): Promise<string[]>      // native multi-select file dialog; [] on cancel
+  saveClipboardImage(a: { data: string; ext: string }): Promise<string>  // pasted clipboard image -> absolute path
   pathForFile(file: File): string     // wraps electron.webUtils.getPathForFile for drag-drop
   onEvent(cb: (e: OcEvent) => void): () => void            // returns unsubscribe
   onServer(cb: (s: ServerStatus) => void): () => void
@@ -358,14 +437,30 @@ export interface OpencodeApi {
   onQuickEntryPrompt(cb: (text: string) => void): () => void
   onUpdateStatus(cb: (status: UpdateStatus) => void): () => void
 }
-export type GeminiLiveInput =
-  | { type: 'text'; text: string }
-  | { type: 'audio'; data: string; mimeType: 'audio/pcm;rate=16000' }
-  | { type: 'video'; data: string; mimeType: 'image/jpeg' }
+export type GeminiLiveInput = {
+  audio?: { data: string; mimeType: 'audio/pcm;rate=16000' }
+  video?: { data: string; mimeType: 'image/jpeg' }
+  text?: string
+}
+export type GeminiLiveConfig = {
+  voice?: string            // allowlist enforced in main (Kore, Puck, Aoede, …)
+  model?: string            // 1-128 chars of [A-Za-z0-9._-]
+  systemInstruction?: string // ≤4000 chars
+}
+export type LiveTranscriptMessage = {
+  role: 'you' | 'gemini' | 'system'
+  text: string
+  at?: number               // epoch ms
+}
 export type GeminiLiveEvent =
   | { type: 'message'; data: unknown }
   | { type: 'error'; message: string }
   | { type: 'closed'; code: number; reason: string }
+  | { type: 'reconnecting'; attempt: number; maxAttempts: number }
+// Session resumption: main enables `sessionResumption` and auto-reconnects an
+// abnormally-dropped socket up to 3 times (1s/2s/4s backoff) with the stored
+// handle, emitting `reconnecting` per attempt. A further `message` event means
+// the resume succeeded; exhaustion arrives as the normal `closed` event.
 declare global { interface Window { api: OpencodeApi } }
 ```
 
@@ -1228,6 +1323,16 @@ killTerminal(id: TermId): Promise<void>
 panelTab: 'files' | 'editor' | 'git' | 'terminal' | 'artifacts' | 'changes' | null   // null = panel collapsed
 setPanelTab(tab: AppState['panelTab']): void
 paletteOpen: boolean; setPaletteOpen(open: boolean): void
+
+// agent slice (harness controls — in-memory, keyed by session id)
+agents: Agent[]                              // registry for the active directory; picker filters primary/all
+sessionAgents: Record<string, string>        // pinned agent per session; absent = server default
+sessionReadOnly: Record<string, boolean>     // true sends READONLY_TOOLS (lib/toolPolicies.ts) on every prompt
+loadAgents(directory: string): Promise<void>
+setSessionAgent(sessionID: string, agent: string | null): void
+setSessionReadOnly(sessionID: string, readOnly: boolean): void
+// sessionSlice also owns unrevertSession(): oc:messages:unrevert, upserts the returned
+// session (revert cleared), then reloads the transcript.
 ```
 
 Renderer-internal drag contract: dragging a file out of the tree sets the MIME type

@@ -1,6 +1,5 @@
 import { BrowserWindow } from 'electron'
-import { resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { isTrustedRendererUrl } from './trustedUrl'
 
 export type QuickEntryOptions = {
   preloadPath: string
@@ -24,25 +23,6 @@ function quickRoute(rendererUrl: string): string {
   const url = new URL(rendererUrl)
   url.hash = '/quick'
   return url.toString()
-}
-
-/** Match the exact trusted renderer origin in development, or the exact
- * packaged renderer HTML file in production. */
-function isTrustedQuickEntryUrl(target: string, rendererUrl: string | undefined, rendererHtmlPath: string): boolean {
-  try {
-    const parsed = new URL(target)
-    if (rendererUrl) {
-      const trusted = new URL(rendererUrl)
-      return parsed.protocol === trusted.protocol && parsed.origin === trusted.origin
-    }
-    return (
-      parsed.protocol === 'file:' &&
-      parsed.hostname === '' &&
-      fileURLToPath(parsed) === resolve(rendererHtmlPath)
-    )
-  } catch {
-    return false
-  }
 }
 
 /** Build a lazy, reusable quick-entry window loading the renderer's `#/quick` route. */
@@ -89,7 +69,7 @@ export function setupQuickEntry(options: QuickEntryOptions): QuickEntryControlle
     // popup, webview, or drag-and-drop navigation is denied.
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
     win.webContents.on('will-navigate', (event, url) => {
-      if (!isTrustedQuickEntryUrl(url, options.rendererUrl, options.rendererHtmlPath)) event.preventDefault()
+      if (!isTrustedRendererUrl(url, options.rendererUrl, options.rendererHtmlPath)) event.preventDefault()
     })
     win.webContents.on('will-frame-navigate', (event) => event.preventDefault())
     win.webContents.on('will-attach-webview', (event) => event.preventDefault())

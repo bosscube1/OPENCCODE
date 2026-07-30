@@ -1,3 +1,34 @@
 .live-screen{position:fixed;inset:0;z-index:20;background:var(--bg);padding:42px 56px;color:var(--fg);overflow:auto}.live-screen__head,.live-screen__body,.live-screen__foot{max-width:1120px;margin:auto}.live-screen__head{display:flex;justify-content:space-between;align-items:start}.live-screen__eyebrow{font:11px var(--mono);letter-spacing:.12em;color:var(--accent)}.live-screen h1{font:34px var(--serif);margin:10px 0 5px}.live-screen p{color:var(--fg-dim)}.live-screen__close,.live-screen__start,.live-screen__controls button{border:1px solid var(--border);border-radius:7px;background:var(--bg-alt);color:var(--fg);padding:9px 14px;cursor:pointer}.live-screen__body{display:grid;grid-template-columns:1.25fr .75fr;gap:22px;margin-top:36px}.live-screen__preview{background:#111;border:1px solid var(--border);border-radius:14px;min-height:360px;position:relative;overflow:hidden}.live-screen__preview canvas{width:100%;height:100%;object-fit:contain}.live-screen__preview-label{position:absolute;left:14px;bottom:12px;background:#111c;padding:6px 9px;border-radius:5px;font:11px var(--mono);color:#fff}.live-screen__conversation{border:1px solid var(--border);border-radius:14px;display:flex;flex-direction:column;min-height:360px;padding:16px}.live-screen__messages{flex:1;overflow:auto}.live-screen__message{background:var(--bg-alt);padding:10px;border-radius:8px;color:var(--fg)!important;font-size:14px}.live-screen__message strong{display:block;color:var(--accent);font:10px var(--mono);letter-spacing:.08em;margin-bottom:5px;text-transform:uppercase}.live-screen__message--you{background:var(--accent-soft)}.live-screen__message--system{background:transparent;border:1px solid var(--border);color:var(--fg-dim)!important}.live-screen__muted{color:var(--fg-dim)!important;background:transparent!important}.live-screen__controls,.live-screen__foot{display:flex;gap:9px}.live-screen input{background:var(--bg-alt);border:1px solid var(--border);border-radius:7px;padding:10px;color:var(--fg);min-width:0}.live-screen__controls input{flex:1}.live-screen__foot{margin-top:18px;align-items:center}.live-screen__foot input{width:280px}.live-screen__error{color:var(--danger);font-size:12px}.live-screen__start{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}.live-screen__dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--fg-dim);margin-right:7px}.live-screen__dot--connecting{background:var(--warn)}.live-screen__dot--live{background:var(--ok);box-shadow:0 0 0 4px color-mix(in srgb,var(--ok) 20%,transparent)}.live-screen__dot--error{background:var(--danger)}
 .live-screen__provider{color:var(--fg-dim);font:12px var(--mono);padding-right:8px}
+.live-screen__head-actions{display:flex;gap:9px}
+.live-screen__settings{max-width:1120px;margin:18px auto 0;border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;flex-wrap:wrap;gap:14px;background:var(--bg-alt)}
+.live-screen__field{display:flex;flex-direction:column;gap:6px;font:11px var(--mono);letter-spacing:.08em;color:var(--fg-dim);text-transform:uppercase;flex:1;min-width:180px}
+.live-screen__field--wide{flex-basis:100%}
+.live-screen__field select,.live-screen__field input,.live-screen__field textarea{background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:9px 10px;color:var(--fg);font-size:13px;font-family:inherit;letter-spacing:normal;text-transform:none}
+.live-screen__field textarea{font:13px var(--mono);resize:vertical}
+.live-screen__settings-note{flex-basis:100%;margin:0;font-size:12px}
+.live-screen__mute--on{border-color:var(--warn);color:var(--warn)}
+.live-screen__dot--reconnecting{background:var(--warn);box-shadow:0 0 0 4px color-mix(in srgb,var(--warn) 20%,transparent)}
+.live-screen__notice{color:var(--ok);font-size:12px}
 @media(max-width:800px){.live-screen{padding:28px}.live-screen__body{grid-template-columns:1fr}.live-screen__foot{flex-wrap:wrap}}
+.live-screen__handoffs{display:flex;gap:9px;flex-wrap:wrap;margin-top:9px}
+.live-screen__handoff{border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--fg-dim);padding:5px 9px;font:11px var(--mono);letter-spacing:.04em;cursor:pointer}
+.live-screen__handoff:hover:not(:disabled){color:var(--accent);border-color:var(--accent)}
+.live-screen__handoff:disabled{opacity:.5;cursor:default}
+.live-screen__message .live-screen__handoff{display:block;margin-top:8px}
+
+/* The copilot now lives in its own ~460px floating window, not a full-screen
+   takeover. Below this width the head row overflows (the Close button falls off
+   the right edge) and the hero block eats the viewport, so compact it. */
+@media(max-width:620px){
+  .live-screen{padding:16px;overflow-x:hidden}
+  .live-screen__head{flex-direction:column;gap:12px}
+  .live-screen__head-actions{flex-wrap:wrap}
+  .live-screen h1{font:22px var(--serif);margin:6px 0 4px}
+  .live-screen__head p{display:none}
+  .live-screen__body{margin-top:16px;gap:14px}
+  .live-screen__preview{min-height:180px}
+  .live-screen__conversation{min-height:220px;padding:12px}
+  .live-screen__foot{flex-wrap:wrap;margin-top:12px}
+  .live-screen__foot input{width:100%}
+}

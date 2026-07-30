@@ -3,7 +3,7 @@
  * Shape is fixed by CONTRACTS.md (`window.api`).
  */
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
-import type { Command, Message, Part, Permission, Provider, Session, Todo } from '@opencode-ai/sdk'
+import type { Agent, Command, Message, Part, Permission, Provider, Session, Todo } from '@opencode-ai/sdk'
 
 export type ServerStatus = {
   running: boolean
@@ -33,6 +33,8 @@ export type PromptArgs = {
    * columns cannot race on one working tree. Omit for normal chat.
    */
   tools?: Record<string, boolean>
+  /** Agent override (e.g. "plan") from the composer picker. Omit for the server default agent. */
+  agent?: string
 }
 
 export type PermissionReplyArgs = {
@@ -68,6 +70,21 @@ export type RevertArgs = {
   directory: string
   sessionID: string
   messageID: string
+}
+
+export type UnrevertArgs = {
+  directory: string
+  sessionID: string
+}
+
+/** Project-config permission levels, as validated by `oc:config:permission:set`. */
+export type PermissionLevel = 'ask' | 'allow' | 'deny'
+export type PermissionConfig = {
+  edit?: PermissionLevel
+  bash?: PermissionLevel | Record<string, PermissionLevel>
+  webfetch?: PermissionLevel
+  doom_loop?: PermissionLevel
+  external_directory?: PermissionLevel
 }
 
 /** One result row from `oc:search:chats`. Importable by renderer streams. */
@@ -143,6 +160,17 @@ export type GeminiLiveInput = {
   audio?: { data: string; mimeType: 'audio/pcm;rate=16000' }
   video?: { data: string; mimeType: 'image/jpeg' }
   text?: string
+}
+/** Optional session overrides for `oc:live:start`; validated against allowlists/bounds in main. */
+export type GeminiLiveConfig = {
+  voice?: string
+  model?: string
+  systemInstruction?: string
+}
+export type LiveTranscriptMessage = {
+  role: 'you' | 'gemini' | 'system'
+  text: string
+  at?: number
 }
 /* --- NanoGPT (subscription provider + image sidecar) ---------------------- */
 
@@ -221,6 +249,7 @@ export type GeminiLiveEvent =
   | { type: 'message'; data: unknown }
   | { type: 'error'; message: string }
   | { type: 'closed'; code: number; reason: string }
+  | { type: 'reconnecting'; attempt: number; maxAttempts: number }
 
 /* --- Phase 1 code surface (fs / git / terminal / editor deep-links) -------
  * Deliberately duplicated rather than imported from src/main/fsService.ts / gitService.ts
@@ -320,6 +349,8 @@ export interface OpencodeApi {
   status(): Promise<ServerStatus>
   restart(): Promise<ServerStatus>
   pickDirectory(): Promise<string | null>
+  /** Native multi-select file picker. Returns absolute paths, or [] when canceled. */
+  pickFiles(): Promise<string[]>
   sessions: {
     list(directory: string): Promise<Session[]>
     create(directory: string, title?: string): Promise<Session>
@@ -359,9 +390,23 @@ export interface OpencodeApi {
   quick: {
     submit(text: string): Promise<void>
   }
+  liveWindow: {
+    open(): Promise<void>
+    close(): Promise<void>
+    setAlwaysOnTop(on: boolean): Promise<void>
+  }
   appSettings: {
     get(): Promise<AppSettingsResult>
     set(patch: Partial<AppSettings>): Promise<AppSettingsResult>
+  }
+  config: {
+    /** The resolved `permission` key of the project config ({} when unset). */
+    getPermission(directory: string): Promise<PermissionConfig>
+    /**
+     * Merges ONLY the permission key into the project config. Resolves true when the
+     * direct-file fallback ran and the server is restarting instead of `config.update`.
+     */
+    setPermission(a: { directory: string; permission: PermissionConfig }): Promise<boolean>
   }
   keys: {
     list(): Promise<KeyRow[]>
@@ -370,10 +415,13 @@ export interface OpencodeApi {
     test(providerID: string): Promise<{ ok: boolean; status?: number; detail?: string }>
   }
   live: {
-    start(): Promise<void>
+    start(config?: GeminiLiveConfig): Promise<void>
     send(input: GeminiLiveInput): void
     stop(): Promise<void>
     onMessage(cb: (event: GeminiLiveEvent) => void): () => void
+    /** Saves the transcript as markdown under userData/live-transcripts; resolves to the file path. */
+    saveTranscript(a: { messages: LiveTranscriptMessage[] }): Promise<string>
+    revealTranscripts(): Promise<void>
   }
   nanogpt: {
     /** Cached catalogues — cheap, synchronous in main, no network. */
@@ -393,6 +441,10 @@ export interface OpencodeApi {
   }
   messages(directory: string, sessionID: string): Promise<MessageWithParts[]>
   revertMessage(a: RevertArgs): Promise<void>
+  /** Restores all reverted messages; resolves to the session with `revert` cleared. */
+  unrevertMessage(a: UnrevertArgs): Promise<Session>
+  /** The server's agent registry for a directory; the picker filters to primary/all modes. */
+  agents(directory: string): Promise<Agent[]>
   searchChats(directory: string, query: string): Promise<ChatSearchHit[]>
   prompt(a: PromptArgs): Promise<void>
   abort(directory: string, sessionID: string): Promise<void>
@@ -403,6 +455,8 @@ export interface OpencodeApi {
   exportChat(defaultName: string, content: string): Promise<boolean>
   /** `encoding` defaults to 'utf8'; pass 'base64' to write bytes (e.g. a generated PNG). */
   saveFile(a: { defaultName: string; content: string; encoding?: 'utf8' | 'base64' }): Promise<boolean>
+  /** Persists a pasted clipboard image (base64 `data`, allowlisted `ext`) and returns its absolute path. */
+  saveClipboardImage(a: { data: string; ext: string }): Promise<string>
   fs: {
     tree(directory: string, path?: string, depth?: number): Promise<FileNode[]>
     read(directory: string, path: string): Promise<FileContent>
@@ -462,6 +516,7 @@ const api: OpencodeApi = {
   status: () => ipcRenderer.invoke('oc:status'),
   restart: () => ipcRenderer.invoke('oc:restart'),
   pickDirectory: () => ipcRenderer.invoke('oc:pickDirectory'),
+  pickFiles: () => ipcRenderer.invoke('oc:pickFiles'),
   sessions: {
     list: (directory) => ipcRenderer.invoke('oc:sessions:list', directory),
     create: (directory, title) => ipcRenderer.invoke('oc:sessions:create', directory, title),
@@ -501,9 +556,18 @@ const api: OpencodeApi = {
   quick: {
     submit: (text) => ipcRenderer.invoke('oc:quick:submit', text)
   },
+  liveWindow: {
+    open: () => ipcRenderer.invoke('oc:liveWindow:open'),
+    close: () => ipcRenderer.invoke('oc:liveWindow:close'),
+    setAlwaysOnTop: (on) => ipcRenderer.invoke('oc:liveWindow:setAlwaysOnTop', on)
+  },
   appSettings: {
     get: () => ipcRenderer.invoke('oc:appSettings:get'),
     set: (patch) => ipcRenderer.invoke('oc:appSettings:set', patch)
+  },
+  config: {
+    getPermission: (directory) => ipcRenderer.invoke('oc:config:permission:get', directory),
+    setPermission: (a) => ipcRenderer.invoke('oc:config:permission:set', a)
   },
   keys: {
     list: () => ipcRenderer.invoke('oc:keys:list'),
@@ -512,10 +576,12 @@ const api: OpencodeApi = {
     test: (providerID) => ipcRenderer.invoke('oc:keys:test', providerID)
   },
   live: {
-    start: () => ipcRenderer.invoke('oc:live:start'),
+    start: (config) => ipcRenderer.invoke('oc:live:start', config),
     send: (input) => ipcRenderer.send('oc:live:send', input),
     stop: () => ipcRenderer.invoke('oc:live:stop'),
-    onMessage: (cb) => subscribe<GeminiLiveEvent>('oc:live:message', cb)
+    onMessage: (cb) => subscribe<GeminiLiveEvent>('oc:live:message', cb),
+    saveTranscript: (a) => ipcRenderer.invoke('oc:live:saveTranscript', a),
+    revealTranscripts: () => ipcRenderer.invoke('oc:live:transcripts:reveal')
   },
   nanogpt: {
     models: () => ipcRenderer.invoke('oc:nanogpt:models'),
@@ -530,6 +596,8 @@ const api: OpencodeApi = {
   },
   messages: (directory, sessionID) => ipcRenderer.invoke('oc:messages:list', directory, sessionID),
   revertMessage: (a) => ipcRenderer.invoke('oc:messages:revert', a),
+  unrevertMessage: (a) => ipcRenderer.invoke('oc:messages:unrevert', a),
+  agents: (directory) => ipcRenderer.invoke('oc:agents:list', directory),
   searchChats: (directory, query) => ipcRenderer.invoke('oc:search:chats', directory, query),
   prompt: (a) => ipcRenderer.invoke('oc:prompt', a),
   abort: (directory, sessionID) => ipcRenderer.invoke('oc:abort', directory, sessionID),
@@ -539,6 +607,7 @@ const api: OpencodeApi = {
   pathForFile: (file) => webUtils.getPathForFile(file),
   exportChat: (defaultName, content) => ipcRenderer.invoke('oc:exportChat', defaultName, content),
   saveFile: (a) => ipcRenderer.invoke('oc:saveFile', a),
+  saveClipboardImage: (a) => ipcRenderer.invoke('oc:clipboard:saveImage', a),
   fs: {
     tree: (directory, path, depth) => ipcRenderer.invoke('oc:fs:tree', { directory, path, depth }),
     read: (directory, path) => ipcRenderer.invoke('oc:fs:read', { directory, path }),

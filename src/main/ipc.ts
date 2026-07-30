@@ -2,10 +2,13 @@
  * Every renderer -> main invoke channel. Channel names are fixed by CONTRACTS.md.
  * Handlers unwrap the SDK's `{ data, error }` fields result and throw a readable Error on failure.
  */
-import { writeFile } from 'node:fs/promises'
-import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
-import type { Message, Part, Provider, Session } from '@opencode-ai/sdk'
+import { mkdir, readdir, stat, unlink, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import type { Agent, Message, Part, Provider, Session } from '@opencode-ai/sdk'
 import { getAuthorizedProviderIDs, getClient, getStatus, isAuthorizedProvider, restartServer, setEventDirectory, type ServerStatus } from './server'
+import { getPermissionConfig, setPermissionConfig, validatePermissionConfig, type PermissionConfig } from './configService'
+import { optionalAgentName, optionalToolPolicy } from './promptValidation'
 import { register as registerFs } from './fsService'
 import { register as registerGit } from './gitService'
 import { register as registerTerminal } from './terminal'
@@ -30,7 +33,9 @@ import {
   type McpSnapshot
 } from './mcp'
 import type { AppSettingsController, AppSettingsResult } from './appSettings'
+import type { LiveWindowController } from './liveWindow'
 import { sendGeminiLive, startGeminiLive, stopGeminiLive, type GeminiLiveInput } from './geminiLive'
+import { saveLiveTranscript, revealTranscriptsFolder } from './liveTranscripts'
 import { markBalanceBilled, readCache, refreshCatalogs, type RefreshResult } from './nanogptConfig'
 import {
   fetchSubscriptionUsage,
@@ -79,6 +84,7 @@ export type NanogptGenerateResult = {
 export type RegisterIpcOptions = {
   appSettings?: Pick<AppSettingsController, 'get' | 'set'>
   onQuickSubmit?: (text: string) => void | Promise<void>
+  liveWindow?: Pick<LiveWindowController, 'show' | 'setAlwaysOnTop' | 'getWindow'>
 }
 
 /** Shape of every SDK call with the default `responseStyle: 'fields'`. */
@@ -119,11 +125,18 @@ const CHANNELS = [
   'oc:mcp:disconnect',
   'oc:mcp:auth',
   'oc:quick:submit',
+  'oc:liveWindow:open',
+  'oc:liveWindow:close',
+  'oc:liveWindow:setAlwaysOnTop',
   'oc:appSettings:get',
   'oc:appSettings:set',
   'oc:exportChat',
   'oc:saveFile',
   'oc:messages:revert',
+  'oc:messages:unrevert',
+  'oc:agents:list',
+  'oc:config:permission:get',
+  'oc:config:permission:set',
   'oc:search:chats',
   'oc:keys:list',
   'oc:keys:set',
@@ -131,6 +144,8 @@ const CHANNELS = [
   'oc:keys:test',
   'oc:live:start',
   'oc:live:stop',
+  'oc:live:saveTranscript',
+  'oc:live:transcripts:reveal',
   'oc:nanogpt:models',
   'oc:nanogpt:refresh',
   'oc:nanogpt:usage',
@@ -154,7 +169,9 @@ const CHANNELS = [
   'oc:term:write',
   'oc:term:resize',
   'oc:term:kill',
-  'oc:openEditor'
+  'oc:openEditor',
+  'oc:pickFiles',
+  'oc:clipboard:saveImage'
 ] as const
 
 /** Sizes the image endpoint is asked for. An allowlist — `size` is forwarded to a paid API. */
@@ -165,6 +182,43 @@ const IMAGE_SIZES: ReadonlySet<string> = new Set([
 
 const MAX_IMAGE_PROMPT = 4000
 const MAX_IMAGE_COUNT = 4
+
+/** Decoded-byte cap for a pasted clipboard image — matches MAX_ATTACHMENT_BYTES in Composer.tsx. */
+const MAX_PASTED_IMAGE_BYTES = 5 * 1024 * 1024
+
+/** Extensions accepted for a pasted clipboard image. `svg` is deliberately excluded (script-capable). */
+const PASTED_IMAGE_EXTS: ReadonlySet<string> = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp'])
+
+/** How long a pasted-image file is kept before `saveClipboardImage` prunes it on next write. */
+const PASTED_IMAGE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+
+/** Monotonic counter so two pastes in the same millisecond never collide. */
+let pastedImageCounter = 0
+
+function pastedImagesDir(): string {
+  return join(app.getPath('userData'), 'pasted-images')
+}
+
+/** Best-effort deletion of pasted-image files older than PASTED_IMAGE_MAX_AGE_MS. Never throws. */
+async function prunePastedImages(dir: string): Promise<void> {
+  try {
+    const entries = await readdir(dir)
+    const cutoff = Date.now() - PASTED_IMAGE_MAX_AGE_MS
+    await Promise.all(
+      entries.map(async (name) => {
+        const full = join(dir, name)
+        try {
+          const info = await stat(full)
+          if (info.isFile() && info.mtimeMs < cutoff) await unlink(full)
+        } catch {
+          // best-effort: a single bad entry must never fail the paste
+        }
+      })
+    )
+  } catch {
+    // best-effort: pruning must never fail the paste
+  }
+}
 
 /**
  * Models with a generation currently in flight.
@@ -255,39 +309,6 @@ function requireObject(value: unknown, name: string): Record<string, unknown> {
 function requirePermissionResponse(value: unknown): PermissionResponse {
   if (value === 'once' || value === 'always' || value === 'reject') return value
   throw new Error(`Invalid permission response: ${String(value)}`)
-}
-
-/** Maximum entries in a per-request tool policy — well above any legitimate use. */
-const MAX_TOOL_POLICY_KEYS = 64
-
-/**
- * Validate an optional per-request tool policy for `promptAsync`.
- *
- * Every key lands in the agent's tool registry, so this is an allowlisted character class rather than
- * a blocklist: lowercase identifiers only, booleans only, bounded size. Returns undefined when absent
- * so the body field is omitted entirely and default tool behaviour is untouched.
- */
-function optionalToolPolicy(value: unknown): Record<string, boolean> | undefined {
-  if (value === undefined || value === null) return undefined
-  if (typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('Invalid IPC argument: tools must be an object of boolean flags.')
-  }
-  const entries = Object.entries(value as Record<string, unknown>)
-  if (entries.length === 0) return undefined
-  if (entries.length > MAX_TOOL_POLICY_KEYS) {
-    throw new Error(`Invalid IPC argument: tools may not exceed ${MAX_TOOL_POLICY_KEYS} entries.`)
-  }
-  const policy: Record<string, boolean> = {}
-  for (const [key, flag] of entries) {
-    if (!/^[a-z_][a-z0-9_]{0,63}$/.test(key)) {
-      throw new Error(`Invalid IPC argument: "${key}" is not a valid tool name.`)
-    }
-    if (typeof flag !== 'boolean') {
-      throw new Error(`Invalid IPC argument: tools.${key} must be a boolean.`)
-    }
-    policy[key] = flag
-  }
-  return policy
 }
 
 /* ------------------------------------------------------------------ */
@@ -413,6 +434,43 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
     return first ?? null
   })
 
+  ipcMain.handle('oc:pickFiles', async (event): Promise<string[]> => {
+    const owner = BrowserWindow.fromWebContents(event.sender)
+    const options: Electron.OpenDialogOptions = {
+      title: 'Attach files',
+      buttonLabel: 'Attach',
+      properties: ['openFile', 'multiSelections']
+    }
+    const result = owner
+      ? await dialog.showOpenDialog(owner, options)
+      : await dialog.showOpenDialog(options)
+    if (result.canceled) return []
+    return result.filePaths
+  })
+
+  ipcMain.handle(
+    'oc:clipboard:saveImage',
+    async (_event, argsArg: unknown): Promise<string> => {
+      const args = requireObject(argsArg, 'args')
+      const data = requireString(args.data, 'data')
+      const ext = requireString(args.ext, 'ext').toLowerCase()
+      if (!PASTED_IMAGE_EXTS.has(ext)) {
+        throw new Error(`Invalid IPC argument: ext must be one of ${[...PASTED_IMAGE_EXTS].join(', ')}.`)
+      }
+      const bytes = Buffer.from(data, 'base64')
+      if (bytes.byteLength > MAX_PASTED_IMAGE_BYTES) {
+        throw new Error(`Pasted image exceeds the ${MAX_PASTED_IMAGE_BYTES} byte limit.`)
+      }
+      const dir = pastedImagesDir()
+      await mkdir(dir, { recursive: true })
+      const filename = `paste-${Date.now()}-${++pastedImageCounter}.${ext}`
+      const filePath = join(dir, filename)
+      await writeFile(filePath, bytes)
+      await prunePastedImages(dir)
+      return filePath
+    }
+  )
+
   ipcMain.handle('oc:sessions:list', async (_event, directoryArg: unknown): Promise<Session[]> => {
     const directory = requireString(directoryArg, 'directory')
     setEventDirectory(directory)
@@ -470,6 +528,10 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
     // the agent's tool registry, so only conservative identifiers are accepted.
     const tools = optionalToolPolicy(args.tools)
 
+    // Optional agent override (e.g. "plan"). Validated against the same charset as MCP names;
+    // the server rejects unknown names, so no registry lookup is needed here.
+    const agent = optionalAgentName(args.agent)
+
     await requireAuthorizedModel(providerID, modelID)
     await call<void>(
       getClient().session.promptAsync({
@@ -478,7 +540,8 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
         body: {
           model: { providerID, modelID },
           parts,
-          ...(tools ? { tools } : {})
+          ...(tools ? { tools } : {}),
+          ...(agent ? { agent } : {})
         }
       })
     )
@@ -726,6 +789,25 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
     await options.onQuickSubmit(text)
   })
 
+  ipcMain.handle('oc:liveWindow:open', (): void => {
+    if (!options.liveWindow) throw new Error('The Gemini Live window is not initialized.')
+    options.liveWindow.show()
+  })
+
+  ipcMain.handle('oc:liveWindow:close', (): void => {
+    if (!options.liveWindow) throw new Error('The Gemini Live window is not initialized.')
+    const win = options.liveWindow.getWindow()
+    if (win && !win.isDestroyed()) win.close()
+  })
+
+  ipcMain.handle('oc:liveWindow:setAlwaysOnTop', (_event, onArg: unknown): void => {
+    if (!options.liveWindow) throw new Error('The Gemini Live window is not initialized.')
+    if (typeof onArg !== 'boolean') {
+      throw new Error('Invalid liveWindow.setAlwaysOnTop argument: on must be a boolean.')
+    }
+    options.liveWindow.setAlwaysOnTop(onArg)
+  })
+
   ipcMain.handle('oc:appSettings:get', (): AppSettingsResult => {
     if (!options.appSettings) throw new Error('App settings are not initialized.')
     return options.appSettings.get()
@@ -803,6 +885,38 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
         body: { messageID }
       })
     )
+  })
+
+  ipcMain.handle('oc:messages:unrevert', async (_event, argsArg: unknown): Promise<Session> => {
+    const args = requireObject(argsArg, 'unrevert args')
+    const directory = requireString(args.directory, 'directory')
+    const sessionID = requireString(args.sessionID, 'sessionID')
+    // The updated session (with `revert` cleared) is returned so the renderer can drop its
+    // reverted-state banner without waiting on the session.updated SSE event.
+    return call<Session>(
+      getClient().session.unrevert({ path: { id: sessionID }, query: { directory } })
+    )
+  })
+
+  ipcMain.handle('oc:agents:list', async (_event, directoryArg: unknown): Promise<Agent[]> => {
+    const directory = requireString(directoryArg, 'directory')
+    return call<Agent[]>(getClient().app.agents({ query: { directory } }))
+  })
+
+  ipcMain.handle(
+    'oc:config:permission:get',
+    (_event, directoryArg: unknown): Promise<PermissionConfig> => {
+      const directory = requireString(directoryArg, 'directory')
+      return getPermissionConfig(getClient(), directory)
+    }
+  )
+
+  ipcMain.handle('oc:config:permission:set', (_event, argsArg: unknown): Promise<boolean> => {
+    const args = requireObject(argsArg, 'permission.set args')
+    const directory = requireString(args.directory, 'directory')
+    // Strictly validated before it can reach opencode.json — unknown keys/values are rejected.
+    const permission = validatePermissionConfig(args.permission)
+    return setPermissionConfig(getClient(), directory, permission, restartServer)
   })
 
   ipcMain.handle(
@@ -1034,9 +1148,16 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
     deleteImage(requireString(idArg, 'id'))
   )
 
-  ipcMain.handle('oc:live:start', (event): Promise<void> => startGeminiLive(event.sender))
+  ipcMain.handle('oc:live:start', (event, config: unknown): Promise<void> => startGeminiLive(event.sender, config))
   ipcMain.handle('oc:live:stop', (event): void => stopGeminiLive(event.sender.id))
   ipcMain.on('oc:live:send', (event, input: GeminiLiveInput): void => sendGeminiLive(event.sender.id, input))
+  ipcMain.handle('oc:live:saveTranscript', (_event, args: unknown): string => {
+    if (typeof args !== 'object' || args === null || Array.isArray(args)) {
+      throw new Error('saveTranscript args must be an object with a messages array')
+    }
+    return saveLiveTranscript((args as { messages?: unknown }).messages)
+  })
+  ipcMain.handle('oc:live:transcripts:reveal', (): void => revealTranscriptsFolder())
 
   /* ---------------------------------------------------------------- */
   /* Phase 1 — fs / git / terminal / editor deep-link (code surface)   */

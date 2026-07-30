@@ -24,6 +24,21 @@ export function Composer(): ReactNode {
   const queuedPrompts = useStore((state) => state.queuedPrompts)
   const queuePrompt = useStore((state) => state.queuePrompt)
   const removeQueued = useStore((state) => state.removeQueued)
+  const agents = useStore((state) => state.agents)
+  const activeAgent = useStore((state) =>
+    state.activeSessionID ? state.sessionAgents[state.activeSessionID] : undefined
+  )
+  const readOnly = useStore((state) =>
+    state.activeSessionID ? state.sessionReadOnly[state.activeSessionID] === true : false
+  )
+  const setSessionAgent = useStore((state) => state.setSessionAgent)
+  const setSessionReadOnly = useStore((state) => state.setSessionReadOnly)
+
+  // Subagents (mode 'subagent') are not selectable as the session's driver.
+  const primaryAgents = useMemo(
+    () => agents.filter((a) => a.mode === 'primary' || a.mode === 'all'),
+    [agents]
+  )
 
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
@@ -202,6 +217,22 @@ export function Composer(): ReactNode {
     }
   }, [])
 
+  /** Shared append logic for every attachment source (mentions, drag-and-drop, the
+   *  attach button, and clipboard paste): derive the filename from the absolute path
+   *  and skip anything already attached. */
+  const addAttachments = useCallback((absPaths: string[]) => {
+    setAttachments((prev) => {
+      const next = [...prev]
+      for (const absPath of absPaths) {
+        if (next.some((a) => a.absPath === absPath)) continue
+        const segments = absPath.split(/[/\\]/)
+        const filename = segments[segments.length - 1]
+        next.push({ filename, absPath })
+      }
+      return next
+    })
+  }, [])
+
   const onSelectMention = useCallback((filepath: string) => {
     if (mentionStart === null) return
     const before = text.slice(0, mentionStart)
@@ -210,19 +241,13 @@ export function Composer(): ReactNode {
     const newText = before + filepath + ' ' + after
     setText(newText)
 
-    const parts = filepath.split(/[/\\]/)
-    const filename = parts[parts.length - 1]
     const absPath = joinPath(directory || '', filepath)
-
-    setAttachments((prev) => {
-      if (prev.find((a) => a.absPath === absPath)) return prev
-      return [...prev, { filename, absPath }]
-    })
+    addAttachments([absPath])
 
     setMentionQuery(null)
     setMentionStart(null)
     areaRef.current?.focus()
-  }, [text, mentionStart, mentionQuery, directory])
+  }, [text, mentionStart, mentionQuery, directory, addAttachments])
 
   /** Only react to file drags — dragging plain text/HTML must not trigger the overlay or a drop.
    *  Covers both an OS file drag (`Files`) and an internal drag started from the file tree
@@ -261,12 +286,7 @@ export function Composer(): ReactNode {
       const internalPath = e.dataTransfer.getData(FILE_TREE_DRAG_MIME)
       if (internalPath && directory) {
         const absPath = joinPath(directory, internalPath)
-        const segments = absPath.split(/[/\\]/)
-        const filename = segments[segments.length - 1]
-        setAttachments((prev) => {
-          if (prev.some((a) => a.absPath === absPath)) return prev
-          return [...prev, { filename, absPath }]
-        })
+        addAttachments([absPath])
         return
       }
 
@@ -279,15 +299,68 @@ export function Composer(): ReactNode {
         const absPath = window.api.pathForFile(file)
         if (!absPath) continue // Electron 43 dropped File.path; empty result means "can't resolve"
 
-        const segments = absPath.split(/[/\\]/)
-        const filename = segments[segments.length - 1]
-        setAttachments((prev) => {
-          if (prev.some((a) => a.absPath === absPath)) return prev
-          return [...prev, { filename, absPath }]
-        })
+        addAttachments([absPath])
       }
     },
-    [disabled, directory]
+    [disabled, directory, addAttachments]
+  )
+
+  const onAttachClick = useCallback(() => {
+    void (async () => {
+      const paths = await window.api.pickFiles()
+      if (paths.length > 0) addAttachments(paths)
+    })()
+  }, [addAttachments])
+
+  /** Handle files pasted into the textarea (e.g. Ctrl+V from Explorer or a clipboard
+   *  screenshot). A normal text paste must keep working untouched, so we only
+   *  preventDefault once we know we've actually consumed at least one file. */
+  const onPaste = useCallback(
+    (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      if (disabled) return
+      const files = Array.from(event.clipboardData.files)
+      if (files.length === 0) return // nothing but text — let the default paste happen
+
+      let consumed = false
+
+      for (const file of files) {
+        // A file copied from Explorer carries a real path — attach it directly,
+        // no byte copy needed.
+        const absPath = window.api.pathForFile(file)
+        if (absPath) {
+          addAttachments([absPath])
+          consumed = true
+          continue
+        }
+
+        // No resolvable path means this is the real clipboard-bitmap case (e.g. a
+        // screenshot). Only images are handleable this way.
+        if (!file.type.startsWith('image/')) continue
+        if (file.size > MAX_ATTACHMENT_BYTES) continue // silent skip, per spec
+        consumed = true
+
+        void (async () => {
+          try {
+            const dataUrl = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader()
+              reader.onload = () => resolve(reader.result as string)
+              reader.onerror = () => reject(reader.error)
+              reader.readAsDataURL(file)
+            })
+            const data = dataUrl.slice(dataUrl.indexOf(',') + 1)
+            const subtype = file.type.slice('image/'.length)
+            const ext = subtype === 'jpeg' ? 'jpg' : subtype
+            const savedPath = await window.api.saveClipboardImage({ data, ext })
+            addAttachments([savedPath])
+          } catch {
+            /* skip silently, consistent with oversize-drop handling */
+          }
+        })()
+      }
+
+      if (consumed) event.preventDefault()
+    },
+    [disabled, addAttachments]
   )
 
   const canSend = !disabled && !sending && text.trim() !== ''
@@ -359,6 +432,7 @@ export function Composer(): ReactNode {
           value={text}
           onChange={onChange}
           onKeyDown={onKeyDown}
+          onPaste={onPaste}
           disabled={disabled}
           rows={1}
           spellCheck={false}
@@ -371,7 +445,50 @@ export function Composer(): ReactNode {
         />
         <div className="composer__actions">
           <div className="composer__actions-left">
+            <button
+              type="button"
+              className="composer__attach"
+              disabled={disabled}
+              onClick={onAttachClick}
+              aria-label="Attach files"
+              title="Attach files"
+            >
+              📎
+            </button>
             <ModelPicker compact />
+            {activeSessionID && primaryAgents.length > 0 && (
+              <select
+                className={`composer__agent${activeAgent ? ' composer__agent--active' : ''}`}
+                value={activeAgent ?? ''}
+                onChange={(event) =>
+                  setSessionAgent(activeSessionID, event.target.value === '' ? null : event.target.value)
+                }
+                title="Agent to run this session's prompts with"
+                aria-label="Agent"
+              >
+                <option value="">Default</option>
+                {primaryAgents.map((a) => (
+                  <option key={a.name} value={a.name}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            {activeSessionID && (
+              <button
+                type="button"
+                className={`composer__pill${readOnly ? ' composer__pill--active' : ''}`}
+                aria-pressed={readOnly}
+                onClick={() => setSessionReadOnly(activeSessionID, !readOnly)}
+                title={
+                  readOnly
+                    ? 'Read-only is ON — the agent cannot write, edit, patch, or run shell commands'
+                    : 'Make this session read-only'
+                }
+              >
+                🔒 Read-only
+              </button>
+            )}
           </div>
           <div className="composer__actions-right">
           {canSend && (
@@ -418,6 +535,12 @@ export function Composer(): ReactNode {
           <span className="composer__hint composer__hint--warn">{blocked}</span>
         ) : (
           <span className="composer__hint">Enter to send · Type / for slash commands</span>
+        )}
+        {(activeAgent || readOnly) && (
+          <span className="composer__flags">
+            {activeAgent && <span className="composer__flag">agent: {activeAgent}</span>}
+            {readOnly && <span className="composer__flag composer__flag--lock">read-only</span>}
+          </span>
         )}
       </div>
     </div>

@@ -1,10 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { JSX, KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useStore } from '../lib/store'
-import { relativeTime } from '../lib/format'
+import { relativeTime, shortPath } from '../lib/format'
 import { findMatches, splitHighlight } from '../lib/search'
+import { exportMarkdown } from '../lib/exportMarkdown'
+import { SLASH_COMMANDS } from '../lib/commands'
+import { loadTipsPrefs, saveTipsPrefs, setTipsEnabled, resetTips, TIPS } from '../lib/tips'
 import type { Theme, RoutingMode } from '../lib/prefs'
+import type { AppState } from '../lib/slices/types'
 import './palette.css'
+
+/** Dispatched by App.tsx (Ctrl+,) and listened for by StatusBar.tsx to toggle Settings. */
+const TOGGLE_SETTINGS_EVENT = 'opencode-desktop:toggle-settings'
+/** Dispatched by Sidebar.tsx and listened for by Chat.tsx to open the global chat-search modal. */
+const OPEN_SEARCH_EVENT = 'chat:open-search'
 
 /** How long to wait after the last keystroke before firing a file search. */
 const FILE_SEARCH_DEBOUNCE_MS = 150
@@ -46,8 +55,11 @@ const VIEW_LABEL: Record<'chats' | 'projects' | 'images', string> = {
   projects: 'Projects',
   images: 'Images'
 }
-const PANEL_LABEL: Record<'editor' | 'git' | 'terminal' | 'artifacts', string> = {
+type PanelTab = NonNullable<AppState['panelTab']>
+const PANEL_LABEL: Record<PanelTab, string> = {
+  files: 'Files',
   editor: 'Editor',
+  changes: 'Changes',
   git: 'Git',
   terminal: 'Terminal',
   artifacts: 'Artifacts'
@@ -94,8 +106,14 @@ export function CommandPalette(): JSX.Element | null {
   const activeView = useStore((s) => s.activeView)
   const setActiveView = useStore((s) => s.setActiveView)
 
+  const projects = useStore((s) => s.projects)
+  const setDirectory = useStore((s) => s.setDirectory)
+  const messages = useStore((s) => s.messages)
+  const addSystemNotice = useStore((s) => s.addSystemNotice)
+
   const [query, setQuery] = useState('')
-  const [activeIndex, setActiveIndex] = useState(0)
+  // Identity, not position: see the activeIndex derivation below for why.
+  const [activeId, setActiveId] = useState<string | null>(null)
 
   // Commit is the one command that needs free-text input. Selecting it switches the
   // single input box into "collect a commit message" mode instead of opening a second dialog.
@@ -120,7 +138,7 @@ export function CommandPalette(): JSX.Element | null {
     if (paletteOpen) {
       previouslyFocused.current = document.activeElement as HTMLElement | null
       setQuery('')
-      setActiveIndex(0)
+      setActiveId(null)
       setCommitMode(false)
       setCommitText('')
       setFileResults([])
@@ -222,12 +240,7 @@ export function CommandPalette(): JSX.Element | null {
       })
     }
 
-    const panelTabs: Array<'editor' | 'git' | 'terminal' | 'artifacts'> = [
-      'editor',
-      'git',
-      'terminal',
-      'artifacts'
-    ]
+    const panelTabs: PanelTab[] = ['files', 'editor', 'changes', 'git', 'terminal', 'artifacts']
     for (const tab of panelTabs) {
       out.push({
         id: `panel:${tab}`,
@@ -320,6 +333,117 @@ export function CommandPalette(): JSX.Element | null {
         }
       })
     }
+    out.push({
+      id: 'view:live',
+      category: 'View',
+      label: 'Open Gemini Live',
+      run: () => {
+        void window.api.liveWindow.open()
+        close()
+      }
+    })
+    out.push({
+      id: 'view:settings',
+      category: 'View',
+      label: 'Open Settings',
+      run: () => {
+        window.dispatchEvent(new Event(TOGGLE_SETTINGS_EVENT))
+        close()
+      }
+    })
+
+    // Tips state is localStorage, not in the store; read directly here for hints/disabled.
+    const tipsPrefs = loadTipsPrefs()
+    out.push({
+      id: 'tips:show',
+      category: 'View',
+      label: 'Show new-user tips',
+      // The count is the catalogue size, not `remainingTipCount`: this action
+      // resets dismissals, and remaining is 0 whenever tips are off — exactly
+      // when the action has the most to restore.
+      hint: `restores all ${TIPS.length}`,
+      run: () => {
+        saveTipsPrefs(resetTips(loadTipsPrefs()))
+        close()
+      }
+    })
+    out.push({
+      id: 'tips:hide',
+      category: 'View',
+      label: 'Hide new-user tips',
+      hint: tipsPrefs.enabled ? undefined : 'already hidden',
+      disabled: !tipsPrefs.enabled,
+      run: () => {
+        saveTipsPrefs(setTipsEnabled(loadTipsPrefs(), false))
+        close()
+      }
+    })
+
+    for (const p of projects) {
+      out.push({
+        id: `project:${p.id}`,
+        category: 'View',
+        label: `Open recent project: ${p.name}`,
+        keywords: p.directory,
+        hint: p.directory === directory ? 'current' : shortPath(p.directory),
+        run: () => {
+          void setDirectory(p.directory)
+          close()
+        }
+      })
+    }
+
+    out.push({
+      id: 'session:search',
+      category: 'Sessions',
+      label: 'Search all chats',
+      run: () => {
+        setActiveView('chats')
+        window.setTimeout(() => window.dispatchEvent(new CustomEvent(OPEN_SEARCH_EVENT)), 0)
+        close()
+      }
+    })
+    out.push({
+      id: 'session:export',
+      category: 'Sessions',
+      label: 'Export chat to Markdown',
+      hint: messages.length === 0 ? 'no messages' : undefined,
+      disabled: messages.length === 0,
+      run: () => {
+        if (messages.length === 0) return
+        const session = sessions.find((s) => s.id === activeSessionID)
+        const defaultName = `${session?.title || 'opencode-chat'}.md`.replace(/[^a-zA-Z0-9._-]/g, '_')
+        const content = exportMarkdown(messages, {
+          sessionTitle: session?.title,
+          directory: directory ?? undefined,
+          providerID: providerID ?? undefined,
+          modelID: modelID ?? undefined,
+          exportedAt: new Date()
+        })
+        void window.api.exportChat(defaultName, content).catch((err: unknown) => {
+          addSystemNotice(`Export failed: ${err instanceof Error ? err.message : String(err)}`)
+        })
+        close()
+      }
+    })
+
+    // Local slash commands whose `action` runs client-side (no server round trip needed
+    // for a `/command` line). Entries with no `action` are handled by the composer's own
+    // parser instead — chosen deliberately over disabling them, since disabled entries with
+    // no way to act on them add clutter without helping discovery.
+    for (const sc of SLASH_COMMANDS) {
+      if (!sc.action) continue
+      out.push({
+        id: `slash:${sc.name}`,
+        category: 'Sessions',
+        label: `${sc.name} — ${sc.description}`,
+        keywords: sc.alias ?? '',
+        run: () => {
+          void sc.action?.('')
+          close()
+        }
+      })
+    }
 
     return out
   }, [
@@ -343,6 +467,11 @@ export function CommandPalette(): JSX.Element | null {
     setTheme,
     activeView,
     setActiveView,
+    directory,
+    projects,
+    setDirectory,
+    messages,
+    addSystemNotice,
     close
   ])
 
@@ -377,10 +506,42 @@ export function CommandPalette(): JSX.Element | null {
     return out
   }, [staticCommands, fileCommands, trimmedQuery, commitMode])
 
-  // Keep the highlighted index valid whenever the filtered list changes size.
+  /* ---- highlight tracking -------------------------------------------------
+   * The highlight is keyed on the command's id and the index is derived from it,
+   * rather than the index being state. `filtered` grows asynchronously: the
+   * debounced file search lands after the list has already rendered and inserts
+   * a whole Files group, which sits third in CATEGORY_ORDER — ahead of Panels,
+   * Git and View. With a positional index the highlight silently slid onto a
+   * different command, so pressing Enter right after typing opened a fuzzy file
+   * match instead of the command the user was looking at. */
+  const activeIndex = useMemo(() => {
+    if (activeId === null) return 0
+    const found = filtered.findIndex((c) => c.id === activeId)
+    // -1 for the one render between the list changing and the effect below
+    // adopting a new id.
+    return found >= 0 ? found : 0
+  }, [filtered, activeId])
+
+  // Adopt the first command whenever nothing is highlighted yet or the
+  // highlighted one has dropped out of the list. Claiming an id up front is what
+  // makes the tracking work — leaving it null would mean "whatever is first",
+  // which is precisely the slot that late-arriving results take over.
   useEffect(() => {
-    if (activeIndex >= filtered.length) setActiveIndex(filtered.length > 0 ? filtered.length - 1 : 0)
-  }, [filtered.length, activeIndex])
+    if (filtered.length === 0) {
+      if (activeId !== null) setActiveId(null)
+      return
+    }
+    if (activeId === null || !filtered.some((c) => c.id === activeId)) {
+      setActiveId(filtered[0].id)
+    }
+  }, [filtered, activeId])
+
+  const setActiveByIndex = useCallback(
+    (index: number) => {
+      setActiveId(filtered[index]?.id ?? null)
+    },
+    [filtered]
+  )
 
   useEffect(() => {
     if (!listRef.current) return
@@ -416,16 +577,16 @@ export function CommandPalette(): JSX.Element | null {
     }
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setActiveIndex((i) => (filtered.length === 0 ? 0 : (i + 1) % filtered.length))
+      if (filtered.length > 0) setActiveByIndex((activeIndex + 1) % filtered.length)
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      setActiveIndex((i) => (filtered.length === 0 ? 0 : (i - 1 + filtered.length) % filtered.length))
+      if (filtered.length > 0) setActiveByIndex((activeIndex - 1 + filtered.length) % filtered.length)
     } else if (e.key === 'Home') {
       e.preventDefault()
-      setActiveIndex(0)
+      setActiveByIndex(0)
     } else if (e.key === 'End') {
       e.preventDefault()
-      setActiveIndex(filtered.length > 0 ? filtered.length - 1 : 0)
+      if (filtered.length > 0) setActiveByIndex(filtered.length - 1)
     } else if (e.key === 'Enter') {
       e.preventDefault()
       const cmd = filtered[activeIndex]
@@ -469,7 +630,9 @@ export function CommandPalette(): JSX.Element | null {
               if (commitMode) setCommitText(e.target.value)
               else {
                 setQuery(e.target.value)
-                setActiveIndex(0)
+                // Null rather than an index: the effect above adopts the first
+                // command of the *new* list once it has been computed.
+                setActiveId(null)
               }
             }}
             onKeyDown={handleKeyDown}
@@ -513,7 +676,7 @@ export function CommandPalette(): JSX.Element | null {
                         (i === activeIndex ? ' palette__option--active' : '') +
                         (cmd.disabled ? ' palette__option--disabled' : '')
                       }
-                      onMouseEnter={() => setActiveIndex(i)}
+                      onMouseEnter={() => setActiveByIndex(i)}
                       onMouseDown={(e) => {
                         e.preventDefault()
                         if (!cmd.disabled) cmd.run()

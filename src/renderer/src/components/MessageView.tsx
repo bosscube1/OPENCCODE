@@ -1,4 +1,4 @@
-import { isValidElement, useCallback, useMemo, useState } from 'react'
+import { isValidElement, memo, useCallback, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import Markdown from 'react-markdown'
 import type { Components } from 'react-markdown'
@@ -10,7 +10,7 @@ import type {
   ReasoningPart,
   ToolPart
 } from '../lib/types'
-import { isFilePart, isTextPart } from '../lib/types'
+import { isAssistant, isFilePart, isReasoningPart, isTextPart } from '../lib/types'
 import { formatCost, formatDuration, formatTokens } from '../lib/format'
 import { guessMime } from '../lib/fileurl'
 import { ToolCall } from './ToolCall'
@@ -232,11 +232,13 @@ function isRenderable(part: Part): boolean {
 function AssistantPart({
   part,
   caret,
-  onImageOpen
+  onImageOpen,
+  collapseTools
 }: {
   part: Part
   caret?: boolean
   onImageOpen?: (src: string) => void
+  collapseTools?: boolean
 }): ReactNode {
   switch (part.type) {
     case 'text':
@@ -244,7 +246,7 @@ function AssistantPart({
     case 'reasoning':
       return <Reasoning part={part} />
     case 'tool':
-      return <ToolCall part={part as ToolPart} />
+      return <ToolCall part={part as ToolPart} collapsed={collapseTools} />
     case 'file': {
       const filePart = part as FilePart
       if (isImageFile(filePart) && onImageOpen) {
@@ -267,7 +269,13 @@ function AssistantPart({
  * Message
  * ------------------------------------------------------------------ */
 
-export function MessageView({ message }: { message: MessageWithParts }): ReactNode {
+function MessageViewImpl({
+  message,
+  collapseTools = false
+}: {
+  message: MessageWithParts
+  collapseTools?: boolean
+}): ReactNode {
   const [copiedText, setCopiedText] = useState(false)
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
   const [editingText, setEditingText] = useState<string | null>(null)
@@ -412,6 +420,7 @@ export function MessageView({ message }: { message: MessageWithParts }): ReactNo
               part={part}
               caret={!finished && part === lastTextPart}
               onImageOpen={setLightboxSrc}
+              collapseTools={collapseTools}
             />
           </div>
         ))}
@@ -491,3 +500,56 @@ export function MessageView({ message }: { message: MessageWithParts }): ReactNo
     </article>
   )
 }
+
+/**
+ * During a stream, the store mutates in place and keeps re-handing us the SAME
+ * `message` identity while `parts` grows and the last part's text lengthens token by
+ * token — a naive `memo` (or none at all) either re-renders every message on every
+ * token (the perf bug this fixes) or freezes mid-stream because it bails out on an
+ * unchanged object reference. So we compare cheap, streaming-relevant signals instead
+ * of the object identity:
+ *  - `message.info.id` — a different message entirely.
+ *  - `collapseTools` — orchestrator-driven prop; flips as older messages scroll out
+ *    of the "recent" window.
+ *  - `parts.length` — a new part (tool call, file, etc.) appeared.
+ *  - the last part's text length — the common case: the tail text/reasoning part
+ *    growing character by character during a stream. Not every part has `.text`
+ *    (e.g. tool/file parts), so this is read defensively.
+ *  - for assistant messages: `info.time.completed` and `info.error`, since those flip
+ *    in place when the message finishes or fails, driving the footer/error UI, without
+ *    touching `parts` at all.
+ */
+function messagePropsAreEqual(
+  prev: { message: MessageWithParts; collapseTools?: boolean },
+  next: { message: MessageWithParts; collapseTools?: boolean }
+): boolean {
+  if (prev.collapseTools !== next.collapseTools) return false
+
+  const prevInfo = prev.message.info
+  const nextInfo = next.message.info
+  if (prevInfo.id !== nextInfo.id) return false
+
+  const prevParts = prev.message.parts
+  const nextParts = next.message.parts
+  if (prevParts.length !== nextParts.length) return false
+
+  const prevLast = prevParts[prevParts.length - 1]
+  const nextLast = nextParts[nextParts.length - 1]
+  const partTextLength = (part: Part | undefined): number => {
+    if (part === undefined) return 0
+    if (isTextPart(part) || isReasoningPart(part)) return part.text.length
+    return 0
+  }
+  if (partTextLength(prevLast) !== partTextLength(nextLast)) return false
+
+  if (isAssistant(prevInfo) && isAssistant(nextInfo)) {
+    if (prevInfo.time.completed !== nextInfo.time.completed) return false
+    if (prevInfo.error !== nextInfo.error) return false
+  } else if (prevInfo.role !== nextInfo.role) {
+    return false
+  }
+
+  return true
+}
+
+export const MessageView = memo(MessageViewImpl, messagePropsAreEqual)

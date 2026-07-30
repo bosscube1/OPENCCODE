@@ -2,7 +2,7 @@
  * Typing for the preload bridge. Kept structurally identical to CONTRACTS.md and to
  * `src/renderer/src/lib/types.ts` (which owns the renderer-side copies of these shapes).
  */
-import type { Command, Message, Part, Permission, Provider, Session, Todo } from '@opencode-ai/sdk'
+import type { Agent, Command, Message, Part, Permission, Provider, Session, Todo } from '@opencode-ai/sdk'
 
 export type ServerStatus = {
   running: boolean
@@ -46,6 +46,8 @@ export type PromptArgs = {
    * columns cannot race on one working tree. Omit for normal chat.
    */
   tools?: Record<string, boolean>
+  /** Agent override (e.g. "plan") from the composer picker. Omit for the server default agent. */
+  agent?: string
 }
 
 export type PermissionReplyArgs = {
@@ -81,6 +83,21 @@ export type RevertArgs = {
   directory: string
   sessionID: string
   messageID: string
+}
+
+export type UnrevertArgs = {
+  directory: string
+  sessionID: string
+}
+
+/** Project-config permission levels, as validated by `oc:config:permission:set`. */
+export type PermissionLevel = 'ask' | 'allow' | 'deny'
+export type PermissionConfig = {
+  edit?: PermissionLevel
+  bash?: PermissionLevel | Record<string, PermissionLevel>
+  webfetch?: PermissionLevel
+  doom_loop?: PermissionLevel
+  external_directory?: PermissionLevel
 }
 
 /** One result row from `oc:search:chats`. Importable by renderer streams. */
@@ -157,10 +174,22 @@ export type GeminiLiveInput = {
   video?: { data: string; mimeType: 'image/jpeg' }
   text?: string
 }
+/** Optional session overrides for `oc:live:start`; validated against allowlists/bounds in main. */
+export type GeminiLiveConfig = {
+  voice?: string
+  model?: string
+  systemInstruction?: string
+}
+export type LiveTranscriptMessage = {
+  role: 'you' | 'gemini' | 'system'
+  text: string
+  at?: number
+}
 export type GeminiLiveEvent =
   | { type: 'message'; data: unknown }
   | { type: 'error'; message: string }
   | { type: 'closed'; code: number; reason: string }
+  | { type: 'reconnecting'; attempt: number; maxAttempts: number }
 
 /* --- NanoGPT (subscription provider + image sidecar) ---------------------- */
 
@@ -333,6 +362,8 @@ export interface OpencodeApi {
   status(): Promise<ServerStatus>
   restart(): Promise<ServerStatus>
   pickDirectory(): Promise<string | null>
+  /** Native multi-select file picker. Returns absolute paths, or [] when canceled. */
+  pickFiles(): Promise<string[]>
   sessions: {
     list(directory: string): Promise<Session[]>
     create(directory: string, title?: string): Promise<Session>
@@ -372,9 +403,23 @@ export interface OpencodeApi {
   quick: {
     submit(text: string): Promise<void>
   }
+  liveWindow: {
+    open(): Promise<void>
+    close(): Promise<void>
+    setAlwaysOnTop(on: boolean): Promise<void>
+  }
   appSettings: {
     get(): Promise<AppSettingsResult>
     set(patch: Partial<AppSettings>): Promise<AppSettingsResult>
+  }
+  config: {
+    /** The resolved `permission` key of the project config ({} when unset). */
+    getPermission(directory: string): Promise<PermissionConfig>
+    /**
+     * Merges ONLY the permission key into the project config. Resolves true when the
+     * direct-file fallback ran and the server is restarting instead of `config.update`.
+     */
+    setPermission(a: { directory: string; permission: PermissionConfig }): Promise<boolean>
   }
   keys: {
     list(): Promise<KeyRow[]>
@@ -383,10 +428,13 @@ export interface OpencodeApi {
     test(providerID: string): Promise<{ ok: boolean; status?: number; detail?: string }>
   }
   live: {
-    start(): Promise<void>
+    start(config?: GeminiLiveConfig): Promise<void>
     send(input: GeminiLiveInput): void
     stop(): Promise<void>
     onMessage(cb: (event: GeminiLiveEvent) => void): () => void
+    /** Saves the transcript as markdown under userData/live-transcripts; resolves to the file path. */
+    saveTranscript(a: { messages: LiveTranscriptMessage[] }): Promise<string>
+    revealTranscripts(): Promise<void>
   }
   nanogpt: {
     /** Cached catalogues — no network call. */
@@ -406,6 +454,10 @@ export interface OpencodeApi {
   }
   messages(directory: string, sessionID: string): Promise<MessageWithParts[]>
   revertMessage(a: RevertArgs): Promise<void>
+  /** Restores all reverted messages; resolves to the session with `revert` cleared. */
+  unrevertMessage(a: UnrevertArgs): Promise<Session>
+  /** The server's agent registry for a directory; the picker filters to primary/all modes. */
+  agents(directory: string): Promise<Agent[]>
   searchChats(directory: string, query: string): Promise<ChatSearchHit[]>
   prompt(a: PromptArgs): Promise<void>
   abort(directory: string, sessionID: string): Promise<void>
@@ -416,6 +468,8 @@ export interface OpencodeApi {
   exportChat(defaultName: string, content: string): Promise<boolean>
   /** `encoding` defaults to 'utf8'; pass 'base64' to write bytes (e.g. a generated PNG). */
   saveFile(a: { defaultName: string; content: string; encoding?: 'utf8' | 'base64' }): Promise<boolean>
+  /** Persists a pasted clipboard image (base64 `data`, allowlisted `ext`) and returns its absolute path. */
+  saveClipboardImage(a: { data: string; ext: string }): Promise<string>
   fs: {
     tree(directory: string, path?: string, depth?: number): Promise<FileNode[]>
     read(directory: string, path: string): Promise<FileContent>

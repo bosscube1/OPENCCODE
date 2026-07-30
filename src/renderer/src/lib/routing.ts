@@ -4,9 +4,31 @@
  * Pure module, no store import, no React.
  */
 
-import { freeCodingQuality } from './freeTier'
+import { freeCodingQuality, OPAQUE_RPM_PROVIDERS } from './freeTier'
+// Type-only: erased at compile time, so this module stays free of the localStorage in prefs.ts.
+import type { RoutingMode } from './prefs'
 
 export type ModelKey = string // format "providerID/modelID"
+
+/**
+ * True when the app may switch models on its own.
+ *
+ * The single predicate behind every auto-routing indicator. It MUST stay identical to the
+ * condition the failover gates test — `attemptMachine.recoverHungAttempt`, `eventSlice`'s
+ * 429 path and `sessionSlice`'s reactive failover all check `routingMode !== 'locked'`.
+ * Previously the indicators read a separate `autoRotate` boolean that no gate consulted, so
+ * a user in `locked` mode saw a "⚡ auto" badge while every failover was silently suppressed.
+ */
+export function isAutoRoutingActive(mode: RoutingMode): boolean {
+  return mode !== 'locked'
+}
+
+/** Short human label for a routing mode, for `/models`, `/doctor` and status surfaces. */
+export function describeRoutingMode(mode: RoutingMode): string {
+  if (mode === 'locked') return 'Locked (your chosen model runs every turn; errors surface immediately)'
+  if (mode === 'failover') return 'Failover (your pin is kept; switches to a healthy free model on 429 or stall)'
+  return 'Auto (pre-selects the healthiest model on every send; may override your pick)'
+}
 
 /**
  * Split a model key on its first slash only. Model IDs may themselves contain
@@ -26,26 +48,170 @@ export type ModelHealth = {
   last429: number | null
   latencyEwma: number | null
   sends: number[] // epoch-ms timestamps, pruned to last 24h
+  /**
+   * `[epochMs, totalTokens]` per completed request, pruned to the last hour.
+   * Separate from `sends` because a send carries no token count until it finishes,
+   * and absent on ledgers written before TPM accounting existed — always read it
+   * defensively.
+   */
+  tokenEvents?: Array<[number, number]>
 }
 
 export type Ledger = Record<ModelKey, ModelHealth>
 
-export type ProviderCaps = { rpm?: number; rpd?: number }
+/**
+ * How a provider's daily allowance resets.
+ * - `rolling-24h` (default): safe when the reset boundary is undocumented. Never
+ *   over-sends, but keeps a model parked for up to a full day after exhaustion.
+ * - `day-pt`: a real calendar reset at midnight Pacific, which is what Google
+ *   documents. Using the rolling window for those would strand the model for
+ *   hours after the quota had already come back.
+ */
+export type RpdWindow = 'rolling-24h' | 'day-pt'
+
+export type ProviderCaps = {
+  rpm?: number
+  rpd?: number
+  /**
+   * Tokens per minute. For Google Flash this is the limit that actually bites: the
+   * account dashboard shows models sitting at 266K and 383K against a 250K ceiling
+   * while nowhere near their request counts. Enforced from observed usage after the
+   * fact (see `tokenEvents`) — a pre-send estimate would need the prompt tokenised,
+   * which the renderer cannot do.
+   */
+  tpm?: number
+  rpdWindow?: RpdWindow
+}
+
+/**
+ * Keyed by `providerID` OR `providerID/modelID`; the specific entry wins and its
+ * key decides the counting scope. See FREE_PROVIDER_CAPS in freeTier.ts — that is
+ * the one table both the router and the UI read.
+ */
 export type ModelCapsMap = Record<string, ProviderCaps>
 
 export const LEDGER_STORAGE_KEY = 'opencode-desktop:routing-ledger'
 
+const DAY_MS = 86400000
+
+const PT_ZONE = 'America/Los_Angeles'
+
+let ptFormatter: Intl.DateTimeFormat | null | undefined
+
+/** Cached formatter, or null when the runtime has no ICU time-zone data. */
+function getPtFormatter(): Intl.DateTimeFormat | null {
+  if (ptFormatter !== undefined) return ptFormatter
+  try {
+    ptFormatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: PT_ZONE,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    })
+  } catch {
+    ptFormatter = null
+  }
+  return ptFormatter
+}
+
+type WallClock = { year: number; month: number; day: number; ms: number }
+
+/** The Pacific wall-clock reading at an instant, or null without ICU data. */
+function ptWallClock(t: number): WallClock | null {
+  const fmt = getPtFormatter()
+  if (fmt === null) return null
+  const parts = fmt.formatToParts(new Date(t))
+  const read = (type: string): number => {
+    const raw = parts.find((p) => p.type === type)?.value
+    const n = raw === undefined ? NaN : Number(raw)
+    return n
+  }
+  const year = read('year')
+  const month = read('month')
+  const day = read('day')
+  const hour = read('hour')
+  const minute = read('minute')
+  const second = read('second')
+  if (![year, month, day, hour, minute, second].every((n) => Number.isFinite(n))) return null
+  return { year, month, day, ms: ((hour * 60 + minute) * 60 + second) * 1000 }
+}
+
+/** Zone offset in ms at an instant: wall clock read as UTC, minus the instant. */
+function ptOffsetMs(t: number): number | null {
+  const wall = ptWallClock(t)
+  if (wall === null) return null
+  const asUTC = Date.UTC(wall.year, wall.month - 1, wall.day) + wall.ms
+  return asUTC - (t - (t % 1000))
+}
+
 /**
- * Conservative estimates for free-tier per-provider rate caps.
- * Documented as non-authoritative fallback bounds.
+ * Epoch ms of the most recent midnight in Pacific time.
+ *
+ * Naively subtracting the elapsed wall-clock time is wrong on the two DST
+ * transition days — the offset at midnight differs from the offset now, which
+ * skews the boundary by an hour. So this resolves the local calendar date, then
+ * converts that date's midnight back to an instant using the offset in effect at
+ * that instant, re-evaluated once because the first guess can land on the far
+ * side of a transition.
  */
-export const DEFAULT_PROVIDER_CAPS: ModelCapsMap = {
-  groq: { rpm: 30 },
-  google: { rpm: 10, rpd: 250 },
-  cerebras: { rpm: 30 },
-  mistral: { rpm: 5, rpd: 50 },
-  cohere: { rpm: 10, rpd: 100 },
-  openrouter: { rpm: 20, rpd: 200 }
+function ptDayStart(now: number): number | null {
+  const wall = ptWallClock(now)
+  if (wall === null) return null
+  const utcMidnight = Date.UTC(wall.year, wall.month - 1, wall.day)
+  const firstOffset = ptOffsetMs(utcMidnight)
+  if (firstOffset === null) return null
+  const guess = utcMidnight - firstOffset
+  const settledOffset = ptOffsetMs(guess)
+  if (settledOffset === null) return null
+  return utcMidnight - settledOffset
+}
+
+/** Start of the current window for a daily allowance. */
+export function rpdWindowStart(now: number, window: RpdWindow | undefined): number {
+  if (window === 'day-pt') {
+    const start = ptDayStart(now)
+    // Without ICU data, fall through to the rolling window: it never over-sends.
+    if (start !== null) return start
+  }
+  return now - DAY_MS
+}
+
+/** When the current daily window ends, i.e. the earliest time the allowance returns. */
+export function rpdWindowEnd(now: number, window: RpdWindow | undefined, oldestSend?: number): number {
+  if (window === 'day-pt') {
+    const start = ptDayStart(now)
+    if (start !== null) {
+      // Next local midnight, not start + 24h: the DST days are 23h and 25h long.
+      const nextGuess = ptDayStart(start + DAY_MS + 3 * 3600_000)
+      if (nextGuess !== null && nextGuess > now) return nextGuess
+      return start + DAY_MS
+    }
+  }
+  // Rolling: the allowance frees up one slot at a time as old sends age out.
+  return (oldestSend ?? now) + DAY_MS
+}
+
+/**
+ * Resolve the caps that apply to a model, and the scope its counters use.
+ * A `providerID/modelID` entry means the provider enforces the limit per model,
+ * so only that model's sends count. A bare `providerID` entry means the limit is
+ * account-wide and every send to the provider counts against it.
+ */
+export function capsFor(
+  caps: ModelCapsMap,
+  key: ModelKey
+): { caps: ProviderCaps; scope: 'model' | 'provider' } | null {
+  const parsed = parseModelKey(key)
+  if (!parsed) return null
+  const exact = caps[key]
+  if (exact) return { caps: exact, scope: 'model' }
+  const byProvider = caps[parsed.providerID]
+  if (byProvider) return { caps: byProvider, scope: 'provider' }
+  return null
 }
 
 const DEFAULT_HEALTH: ModelHealth = {
@@ -65,11 +231,26 @@ const DEFAULT_HEALTH: ModelHealth = {
  * directly, capped at 120s. Otherwise exponential backoff applies: 30s
  * initial, doubling per consecutive 429, capped at 30 minutes.
  */
-export function record429(ledger: Ledger, key: ModelKey, now: number, retryAfterMs?: number): Ledger {
+export function record429(
+  ledger: Ledger,
+  key: ModelKey,
+  now: number,
+  retryAfterMs?: number,
+  opts?: { daily?: boolean; caps?: ModelCapsMap }
+): Ledger {
   const existing = ledger[key] ?? { ...DEFAULT_HEALTH }
 
   let newCooldownMs: number
-  if (retryAfterMs !== undefined) {
+  if (opts?.daily === true) {
+    // A daily allowance does not come back in two minutes. Capping this at 120s
+    // like an RPM wait meant an exhausted model was re-selected every couple of
+    // minutes for the rest of the day, burning a failover cycle each time and
+    // guaranteeing another 429. Park it until the allowance actually resets.
+    const window = opts.caps ? capsFor(opts.caps, key)?.caps.rpdWindow : undefined
+    const oldestSend = existing.sends.length > 0 ? Math.min(...existing.sends) : undefined
+    const untilReset = rpdWindowEnd(now, window, oldestSend) - now
+    newCooldownMs = Math.max(retryAfterMs ?? 0, untilReset, 60_000)
+  } else if (retryAfterMs !== undefined) {
     newCooldownMs = Math.min(120_000, Math.max(1000, retryAfterMs))
   } else {
     const isConsecutive = existing.cooldownUntil > now || (existing.last429 !== null && now - existing.last429 <= existing.cooldownMs + 60000)
@@ -182,26 +363,90 @@ export function recordTimeout(ledger: Ledger, key: ModelKey, now: number): Ledge
 export function underRateCaps(ledger: Ledger, key: ModelKey, caps: ModelCapsMap, now: number): boolean {
   const parsed = parseModelKey(key)
   if (!parsed) return false
-  const { providerID } = parsed
-  const cap = caps[providerID]
-  if (!cap) return true
+  const resolved = capsFor(caps, key)
+  if (!resolved) return true
 
-  const sends = Object.entries(ledger)
-    .filter(([modelKey]) => parseModelKey(modelKey)?.providerID === providerID)
-    .flatMap(([, health]) => health.sends)
-  if (sends.length === 0) return true
+  const sends = sendsInScope(ledger, key, resolved.scope)
 
-  if (cap.rpm !== undefined) {
+  // No `sends.length === 0` shortcut: token usage is tracked separately, so an empty
+  // send list does not imply an idle model. It also means a declared cap of 0 blocks
+  // correctly — which is what the AI Studio dashboard's `0/0` rows are (Pro, Veo,
+  // Nano Banana have no free quota at all).
+  const cap = resolved.caps
+  // Providers that stopped publishing their RPM get no pre-emptive minute gate: the
+  // table's number is a guess, and blocking on a guess costs more than the one
+  // request it takes to learn the truth. A real 429 still parks them via record429's
+  // exponential backoff, so the ceiling is discovered rather than assumed.
+  const enforceRpm = cap.rpm !== undefined && !OPAQUE_RPM_PROVIDERS.has(parsed.providerID)
+  if (enforceRpm) {
     const rpmSends = sends.filter((t) => now - t <= 60000).length
-    if (rpmSends >= cap.rpm) return false
+    if (rpmSends >= (cap.rpm as number)) return false
   }
 
   if (cap.rpd !== undefined) {
-    const rpdSends = sends.filter((t) => now - t <= 86400000).length
+    const windowStart = rpdWindowStart(now, cap.rpdWindow)
+    const rpdSends = sends.filter((t) => t >= windowStart).length
     if (rpdSends >= cap.rpd) return false
   }
 
+  // TPM last, because it is the one most likely to be the real blocker on Google
+  // Flash and the one the router previously ignored entirely.
+  if (cap.tpm !== undefined) {
+    if (tokensInLastMinute(ledger, key, resolved.scope, now) >= cap.tpm) return false
+  }
+
   return true
+}
+
+const TOKEN_EVENT_RETENTION_MS = 3600_000
+
+/**
+ * Record the token cost of a completed request, for TPM accounting.
+ * Called alongside `recordSuccess`; a request whose token count never arrives simply
+ * does not contribute, which errs toward sending rather than blocking.
+ */
+export function recordTokens(ledger: Ledger, key: ModelKey, tokens: number, now: number): Ledger {
+  if (!Number.isFinite(tokens) || tokens <= 0) return ledger
+  const existing = ledger[key] ?? { ...DEFAULT_HEALTH }
+  const kept = (existing.tokenEvents ?? []).filter(([t]) => now - t <= TOKEN_EVENT_RETENTION_MS)
+  kept.push([now, Math.round(tokens)])
+  return { ...ledger, [key]: { ...existing, tokenEvents: kept } }
+}
+
+/** Token events counted against a cap, per its scope. */
+function tokenEventsInScope(
+  ledger: Ledger,
+  key: ModelKey,
+  scope: 'model' | 'provider'
+): Array<[number, number]> {
+  if (scope === 'model') return ledger[key]?.tokenEvents ?? []
+  const providerID = parseModelKey(key)?.providerID
+  if (providerID === undefined) return []
+  const entries: Array<[number, number]> = []
+  for (const [modelKey, health] of Object.entries(ledger)) {
+    if (parseModelKey(modelKey)?.providerID !== providerID) continue
+    entries.push(...(health.tokenEvents ?? []))
+  }
+  return entries
+}
+
+/** Tokens observed in the trailing 60s within a cap's scope. */
+function tokensInLastMinute(ledger: Ledger, key: ModelKey, scope: 'model' | 'provider', now: number): number {
+  let total = 0
+  for (const [t, tokens] of tokenEventsInScope(ledger, key, scope)) {
+    if (now - t <= 60000) total += tokens
+  }
+  return total
+}
+
+/** Send timestamps counted against a cap, per its scope. */
+function sendsInScope(ledger: Ledger, key: ModelKey, scope: 'model' | 'provider'): number[] {
+  if (scope === 'model') return ledger[key]?.sends ?? []
+  const providerID = parseModelKey(key)?.providerID
+  if (providerID === undefined) return []
+  return Object.entries(ledger)
+    .filter(([modelKey]) => parseModelKey(modelKey)?.providerID === providerID)
+    .flatMap(([, health]) => health.sends)
 }
 
 /**
@@ -301,6 +546,74 @@ export function selectModel(
   return scored[0].key
 }
 
+/**
+ * Earliest moment any candidate becomes usable again, for when `selectModel`
+ * returns null because everything is cooling down or capped. Without this the
+ * only thing to show the user is the raw provider error from the last attempt,
+ * which says nothing about when to try again.
+ *
+ * Returns null when no candidate can ever recover on its own (empty pool, or
+ * every model failing for a non-rate reason).
+ */
+export function nextAvailableAt(
+  pool: ModelKey[],
+  ledger: Ledger,
+  caps: ModelCapsMap,
+  now: number
+): { key: ModelKey; at: number } | null {
+  let best: { key: ModelKey; at: number } | null = null
+
+  for (const key of pool) {
+    const health = ledger[key]
+    let at = health?.cooldownUntil !== undefined && health.cooldownUntil > now ? health.cooldownUntil : now
+    const resolved = capsFor(caps, key)
+
+    if (resolved) {
+      const sends = sendsInScope(ledger, key, resolved.scope)
+      const cap = resolved.caps
+
+      // Mirrors underRateCaps: an unenforced guess must not produce a wait time either.
+      const providerID = parseModelKey(key)?.providerID
+      if (cap.rpm !== undefined && providerID !== undefined && !OPAQUE_RPM_PROVIDERS.has(providerID)) {
+        const inWindow = sends.filter((t) => now - t <= 60000).sort((a, b) => a - b)
+        // At the cap, a slot frees up 60s after the oldest send still in the window.
+        if (inWindow.length >= cap.rpm) at = Math.max(at, inWindow[inWindow.length - cap.rpm] + 60000)
+      }
+
+      if (cap.rpd !== undefined) {
+        const windowStart = rpdWindowStart(now, cap.rpdWindow)
+        const inWindow = sends.filter((t) => t >= windowStart).sort((a, b) => a - b)
+        if (inWindow.length >= cap.rpd) {
+          at = Math.max(at, rpdWindowEnd(now, cap.rpdWindow, inWindow[inWindow.length - cap.rpd]))
+        }
+      }
+
+      if (cap.tpm !== undefined) {
+        const used = tokensInLastMinute(ledger, key, resolved.scope, now)
+        if (used >= cap.tpm) {
+          // Shed the oldest token events until the trailing total would fit; the
+          // window clears 60s after the last one that had to go.
+          const events = tokenEventsInScope(ledger, key, resolved.scope)
+            .filter(([t]) => now - t <= 60000)
+            .sort((a, b) => a[0] - b[0])
+          let remaining = used
+          let freesAt = now
+          for (const [t, tokens] of events) {
+            remaining -= tokens
+            freesAt = t + 60000
+            if (remaining < cap.tpm) break
+          }
+          at = Math.max(at, freesAt)
+        }
+      }
+    }
+
+    if (best === null || at < best.at) best = { key, at }
+  }
+
+  return best
+}
+
 /** Higher values indicate a stronger likely coding model, using provider/model IDs only. */
 export function codingQuality(key: ModelKey): number {
   const parsed = parseModelKey(key)
@@ -349,8 +662,27 @@ export function loadLedger(): Ledger {
       const success = typeof health.success === 'number' ? health.success : 0
       const error = typeof health.error === 'number' ? health.error : 0
 
+      // Absent on any ledger written before TPM accounting, and each element must be
+      // validated individually — a corrupt entry here would silently poison the
+      // trailing-minute total and could block a healthy model indefinitely.
+      const tokenEvents = Array.isArray(health.tokenEvents)
+        ? health.tokenEvents.filter(
+            (e): e is [number, number] =>
+              Array.isArray(e) &&
+              e.length === 2 &&
+              typeof e[0] === 'number' &&
+              typeof e[1] === 'number' &&
+              Number.isFinite(e[0]) &&
+              Number.isFinite(e[1]) &&
+              e[1] > 0 &&
+              now - e[0] <= TOKEN_EVENT_RETENTION_MS
+          )
+        : []
+
       // Omit empty useless entries
-      if (sends.length === 0 && success === 0 && error === 0 && cooldownUntil === 0) continue
+      if (sends.length === 0 && success === 0 && error === 0 && cooldownUntil === 0 && tokenEvents.length === 0) {
+        continue
+      }
 
       pruned[key] = {
         cooldownUntil,
@@ -359,7 +691,8 @@ export function loadLedger(): Ledger {
         error,
         last429: typeof health.last429 === 'number' ? health.last429 : null,
         latencyEwma: typeof health.latencyEwma === 'number' ? health.latencyEwma : null,
-        sends
+        sends,
+        ...(tokenEvents.length > 0 ? { tokenEvents } : {})
       }
     }
 

@@ -18,6 +18,7 @@ import type {
   ServerStatus,
   Session,
   Todo,
+  Agent,
   ServerCommand,
   ProjectRecord,
   PromptPart,
@@ -51,9 +52,14 @@ export interface AppState {
   /** User's pinned choice — mutated only by setModel. Never overwritten by failover. */
   pinnedProviderID: string | null
   pinnedModelID: string | null
-  autoRotate: boolean
   modelPool: string[] | null
-  stickyModel: boolean
+  /**
+   * The ONLY source of truth for routing behaviour. The legacy `autoRotate`/`stickyModel`
+   * booleans are gone from state: they were a second, divergent source that no gate ever
+   * read, so the UI could advertise auto-routing while `locked` silently suppressed it.
+   * They survive on disk only as derived keys written by `savePrefs` for downgrade safety.
+   * Auto model-switching is active iff `routingMode !== 'locked'`.
+   */
   routingMode: RoutingMode
   showPaidModels: boolean
   // permissions awaiting user answer, oldest first
@@ -93,6 +99,42 @@ export interface AppState {
   /** Leave the run's sessions in place but stop showing the comparison. */
   clearCompare(): void
 
+  /* ---- subagent viewing tabs (Task-tool child sessions) ---- */
+  /** Open child session ids, in open order. The chat shows a tab strip when non-empty. */
+  subagentTabs: string[]
+  /** The tab being viewed, or null for the main (parent) transcript. */
+  activeSubagentTab: string | null
+  /** Per-child transcripts, keyed by session id, ordered oldest -> newest. */
+  subagentMessages: Record<string, MessageWithParts[]>
+  /** Per-child busy flags, driven by session.status / session.idle events. */
+  subagentBusy: Record<string, boolean>
+  /** Per-child error text (absent key = no error). */
+  subagentError: Record<string, string | null>
+  /** Open a tab for a child session, view it, and backfill its history once. */
+  openSubagentTab(sessionID: string): Promise<void>
+  /** Drop a tab and its cached records; viewing it falls back to the main transcript. */
+  closeSubagentTab(sessionID: string): void
+  /** Switch the viewed tab. Null = main transcript; unknown ids are ignored. */
+  setActiveSubagentTab(sessionID: string | null): void
+  /** Abort a running child session (read-only tabs never prompt into it). */
+  stopSubagent(sessionID: string): Promise<void>
+  /** Reset everything — runs on session switch and directory change. */
+  clearSubagents(): void
+
+  /* ---- agent harness: per-session agent picker + read-only toggle ---- */
+  /** The server's agent registry for the active directory (all modes; the picker filters). */
+  agents: Agent[]
+  /** Per-session chosen agent name; absent key = server default agent. In-memory only. */
+  sessionAgents: Record<string, string>
+  /** Per-session read-only flag; true sends the READONLY_TOOLS policy on every prompt. */
+  sessionReadOnly: Record<string, boolean>
+  /** Refetch the agent registry; quiet on failure. Runs on directory change. */
+  loadAgents(directory: string): Promise<void>
+  /** Pin an agent to a session (null clears back to the server default). */
+  setSessionAgent(sessionID: string, agent: string | null): void
+  /** Toggle a session's read-only tool policy. */
+  setSessionReadOnly(sessionID: string, readOnly: boolean): void
+
   // actions
   init(): Promise<void>
   pickDirectory(): Promise<void>
@@ -111,8 +153,8 @@ export interface AppState {
   abort(): Promise<void>
   setModel(providerID: string, modelID: string): void
   revertToPinned(): void
+  /** Toggles auto model-switching: `locked` <-> `failover`. Any non-locked mode toggles off. */
   toggleAutoRotate(): void
-  toggleStickyModel(): void
   setRoutingMode(mode: RoutingMode): void
   setShowPaidModels(v: boolean): void
   setModelPool(pool: string[] | null): void
@@ -128,6 +170,8 @@ export interface AppState {
   removeQueued(index: number): void
   retryExchange(messageID: string): Promise<void>
   editAndResend(messageID: string, newText: string): Promise<void>
+  /** Restore a reverted session (unrevert), then reload its transcript. */
+  unrevertSession(): Promise<void>
   setActiveArtifactID(id: string | null): void
 
   /* ---- Phase 1 code surface: fs / editor / git / terminal / panel UI ---- */

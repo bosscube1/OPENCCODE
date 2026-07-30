@@ -47,7 +47,7 @@ src/
     mcp.ts              MCP connector management
     projects.ts, projectsPaths.ts   project registry; assertSubpath() containment helper
     appSettings.ts, updater.ts, menu.ts, tray.ts, quickEntry.ts, crashlog.ts, openEditor.ts
-    providerCatalog.ts, nanogpt*.ts, geminiLive.ts   provider integrations
+    providerCatalog.ts, nanogpt*.ts, geminiLive.ts, geminiLiveConfig.ts, liveTranscripts.ts   provider integrations
     __tests__/          vitest unit tests for main modules
   preload/
     index.ts            contextBridge definition of window.api (the ONLY bridge)
@@ -60,8 +60,8 @@ src/
                         TerminalPanel, EditorPanel, ChangesPanel, ...) + per-feature .css files
       lib/
         store.ts        zustand store — COMPOSITION ROOT ONLY; state lives in slices/
-        slices/         domain slices: session, routing, compare, projects, ui, event,
-                        editor, fileTree, git, terminal, images, attemptMachine
+        slices/         domain slices: session, routing, compare, subagent, agent, projects, ui,
+                        event, editor, fileTree, git, terminal, images, attemptMachine
         types.ts        shared renderer types
         *.ts            pure helper modules (format, routing, rotation, hunks, artifacts, ...)
         __tests__/      vitest unit tests for helpers and slices

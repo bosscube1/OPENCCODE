@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { JSX } from 'react'
 import { useStore } from '../lib/store'
-import { loadLedger, type Ledger, type ModelHealth } from '../lib/routing'
-import { FREE_MODEL_TIERS, FREE_PROVIDER_CAPS } from '../lib/freeTier'
+import { loadLedger, capsFor, rpdWindowStart, type Ledger, type ModelHealth } from '../lib/routing'
+import { FREE_MODEL_TIERS, FREE_PROVIDER_CAPS, OPAQUE_RPM_PROVIDERS } from '../lib/freeTier'
 
 function formatSecondsAgo(then: number, now: number): string {
   const secs = Math.round((now - then) / 1000)
@@ -41,14 +41,21 @@ export function RoutingPanel(): JSX.Element {
     )
   }
 
-  // Aggregate provider-level sends for the daily bar
-  const providerSendCounts: Record<string, number> = {}
-  for (const [key, health] of Object.entries(ledger)) {
-    const sep = key.indexOf('/')
-    if (sep <= 0) continue
-    const pid = key.slice(0, sep)
-    const rpd = health.sends.filter((t) => now - t <= 86_400_000).length
-    providerSendCounts[pid] = (providerSendCounts[pid] ?? 0) + rpd
+  // Counted exactly the way the router counts, so this panel and the throttle can
+  // never disagree: the scope and the daily window both come from capsFor.
+  const usage = new Map<string, { used: number; cap: number | null }>()
+  for (const e of rows) {
+    const key = `${e.providerID}/${e.modelID}`
+    const resolved = capsFor(FREE_PROVIDER_CAPS, key)
+    const cap = resolved?.caps.rpd ?? null
+    const windowStart = rpdWindowStart(now, resolved?.caps.rpdWindow)
+    const sends =
+      resolved?.scope === 'provider'
+        ? Object.entries(ledger)
+            .filter(([k]) => k.startsWith(`${e.providerID}/`))
+            .flatMap(([, h]) => h.sends)
+        : (ledger[key]?.sends ?? [])
+    usage.set(key, { used: sends.filter((t) => t >= windowStart).length, cap })
   }
 
   return (
@@ -65,8 +72,9 @@ export function RoutingPanel(): JSX.Element {
           ? Math.round(health.latencyEwma)
           : null
         const cooldown = health ? cooldownRemaining(health, now) : 0
-        const rpdTodayProvider = providerSendCounts[e.providerID] ?? 0
-        const rpdCap = FREE_PROVIDER_CAPS[e.providerID]?.rpd ?? e.rpd ?? null
+        const modelUsage = usage.get(key) ?? { used: 0, cap: null }
+        const rpdTodayProvider = modelUsage.used
+        const rpdCap = modelUsage.cap ?? e.rpd ?? null
 
         return (
           <div key={key} style={{
@@ -91,7 +99,7 @@ export function RoutingPanel(): JSX.Element {
               <span style={{ color: 'var(--fg-dim)', fontSize: '10.5px' }}>
                 {rpdCap ? `${rpdTodayProvider}/${rpdCap}` : `${rpdTodayProvider} today`}
                 {' · '}
-                {e.rpm} rpm
+                {OPAQUE_RPM_PROVIDERS.has(e.providerID) ? 'rpm unpublished' : `${e.rpm} rpm`}
               </span>
             </div>
 

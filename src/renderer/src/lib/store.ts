@@ -11,6 +11,8 @@
  *   sessionSlice   server status, directory, sessions, messages, busy, queue, send/abort
  *   routingSlice   providers, chosen/effective model split, rotation
  *   compareSlice   the multi-model fan-out and its own SSE path
+ *   subagentSlice  Task-tool child session tabs and their own SSE path
+ *   agentSlice     agent registry, per-session agent picker + read-only toggle
  *   projectsSlice  projects, app settings, updater status
  *   uiSlice        theme, active view, permissions, error banner, artifact panel
  *   eventSlice     `applyEvent`, the one SSE reducer, composed over all of the above
@@ -26,6 +28,7 @@ import { loadPrefs, savePrefs } from './prefs'
 import { pickDefaultModel, restoredSelectionValid } from './rotation'
 import { api, errText } from './slices/api'
 import { restoreLedger } from './slices/attemptMachine'
+import { createAgentSlice } from './slices/agentSlice'
 import { createCompareSlice } from './slices/compareSlice'
 import { createEditorSlice } from './slices/editorSlice'
 import { createEventSlice } from './slices/eventSlice'
@@ -34,6 +37,7 @@ import { createGitSlice } from './slices/gitSlice'
 import { createProjectsSlice } from './slices/projectsSlice'
 import { createRoutingSlice } from './slices/routingSlice'
 import { createSessionSlice } from './slices/sessionSlice'
+import { createSubagentSlice } from './slices/subagentSlice'
 import { createTerminalSlice } from './slices/terminalSlice'
 import { createUiSlice } from './slices/uiSlice'
 import { registerStore } from './slices/storeRef'
@@ -51,6 +55,8 @@ export const useStore = create<AppState>()((set, get) => {
     ...createSessionSlice(setState, getState),
     ...createRoutingSlice(setState, getState),
     ...createCompareSlice(setState, getState),
+    ...createSubagentSlice(setState, getState),
+    ...createAgentSlice(setState, getState),
     ...createProjectsSlice(setState, getState),
     ...createUiSlice(setState, getState),
     ...createFileTreeSlice(setState, getState),
@@ -113,10 +119,8 @@ export const useStore = create<AppState>()((set, get) => {
         modelID,
         pinnedProviderID: providerID,
         pinnedModelID: modelID,
-        autoRotate: prefs.autoRotate,
         theme: prefs.theme,
         modelPool: prefs.modelPool,
-        stickyModel: prefs.stickyModel,
         routingMode: prefs.routingMode,
         showPaidModels: prefs.showPaidModels,
         compareTargets: prefs.compareTargets,
@@ -125,10 +129,8 @@ export const useStore = create<AppState>()((set, get) => {
         directory: prefs.directory,
         providerID,
         modelID,
-        autoRotate: prefs.autoRotate,
         theme: prefs.theme,
         modelPool: prefs.modelPool,
-        stickyModel: prefs.stickyModel,
         routingMode: prefs.routingMode,
         showPaidModels: prefs.showPaidModels,
       })
@@ -193,10 +195,8 @@ function subscribe(): void {
                 directory: useStore.getState().directory,
                 providerID: nextProvider,
                 modelID: nextModel,
-                autoRotate: useStore.getState().autoRotate,
                 theme: useStore.getState().theme,
                 modelPool: useStore.getState().modelPool,
-                stickyModel: useStore.getState().stickyModel,
                 routingMode: useStore.getState().routingMode,
                 showPaidModels: useStore.getState().showPaidModels,
               })

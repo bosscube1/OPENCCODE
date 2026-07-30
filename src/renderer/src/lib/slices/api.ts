@@ -10,11 +10,13 @@ import type {
   AppSettingsResult,
   MessageWithParts,
   OcEvent,
+  PermissionConfig,
   PermissionResponse,
   Provider,
   ServerStatus,
   Session,
   Todo,
+  Agent,
   ServerCommand,
   ProjectRecord,
   PromptPart,
@@ -63,6 +65,10 @@ export interface OpencodeApi {
     get(): Promise<AppSettingsResult>
     set(patch: Partial<AppSettings>): Promise<AppSettingsResult>
   }
+  config: {
+    getPermission(directory: string): Promise<PermissionConfig>
+    setPermission(a: { directory: string; permission: PermissionConfig }): Promise<boolean>
+  }
   nanogpt: {
     models(): Promise<NanogptModelsResult>
     refresh(): Promise<NanogptRefreshResult>
@@ -76,6 +82,8 @@ export interface OpencodeApi {
   }
   messages(directory: string, sessionID: string): Promise<MessageWithParts[]>
   revertMessage(a: { directory: string; sessionID: string; messageID: string }): Promise<void>
+  unrevertMessage(a: { directory: string; sessionID: string }): Promise<Session>
+  agents(directory: string): Promise<Agent[]>
   prompt(a: {
     directory: string
     sessionID: string
@@ -85,6 +93,8 @@ export interface OpencodeApi {
     parts?: PromptPart[]
     /** Per-request tool policy; compare runs use it to disable every mutating tool. */
     tools?: Record<string, boolean>
+    /** Agent override from the composer picker; omit for the server default agent. */
+    agent?: string
   }): Promise<void>
   abort(directory: string, sessionID: string): Promise<void>
   providers(): Promise<{ providers: Provider[]; default: Record<string, string>; linkedProviderIDs: string[] }>
