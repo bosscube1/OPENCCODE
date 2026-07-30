@@ -106,6 +106,9 @@ export type PermissionConfig = {
   external_directory?: PermissionLevel
 }
 
+/** Scope for `oc:search:chats`: the active project only, or every known project. */
+export type ChatSearchScope = 'project' | 'all'
+
 /** One result row from `oc:search:chats`. Importable by renderer streams. */
 export type ChatSearchHit = {
   sessionID: string
@@ -113,6 +116,8 @@ export type ChatSearchHit = {
   messageID: string
   snippet: string
   time: number
+  /** Absolute directory of the project the hit came from (always set, incl. `scope: 'project'`). */
+  directory: string
 }
 
 /** One masked BYOK key row from `oc:keys:list`. Never carries the full key. */
@@ -467,7 +472,7 @@ export interface OpencodeApi {
   forkSession(a: ForkArgs): Promise<Session>
   /** The server's agent registry for a directory; the picker filters to primary/all modes. */
   agents(directory: string): Promise<Agent[]>
-  searchChats(directory: string, query: string): Promise<ChatSearchHit[]>
+  searchChats(directory: string, query: string, options?: { scope?: ChatSearchScope }): Promise<ChatSearchHit[]>
   prompt(a: PromptArgs): Promise<void>
   abort(directory: string, sessionID: string): Promise<void>
   providers(): Promise<ProvidersResult>

@@ -187,9 +187,13 @@ Every handler returns `Promise<T>` and **throws** on failure (renderer catches).
                         // (known keys, ask|allow|deny; bash may be a pattern map).
                         // Uses config.update; on failure rewrites opencode.json
                         // atomically + restarts the server (returns true).
-'oc:search:chats'       (directory: string, query: string) => ChatSearchHit[]
-                        // global chat-content search, runs in main with a
-                        // bounded (concurrency 4) message-fetch pool + LRU cache.
+'oc:search:chats'       (directory: string, query: string, options?: { scope?: 'project' | 'all' }) => ChatSearchHit[]
+                        // chat-content search, runs in main with a bounded
+                        // (concurrency 4) per-directory message-fetch pool + LRU cache.
+                        // scope defaults to 'project' (current directory only, unchanged
+                        // behaviour); 'all' additionally searches every directory from
+                        // listProjects(), fanned out through the same pool helper at
+                        // concurrency 2 so total fan-out stays bounded.
 'oc:saveFile'           (args: { defaultName: string; content: string }) => boolean
                         // generalized save dialog for artifact export/download
 
@@ -265,8 +269,11 @@ and never read back in the clear across the bridge.
 `ChatSearchHit` (exported from `src/preload/index.ts`, importable by the renderer):
 
 ```ts
+export type ChatSearchScope = 'project' | 'all'
+
 export type ChatSearchHit = {
   sessionID: string; title: string; messageID: string; snippet: string; time: number
+  directory: string // absolute directory the hit came from; always set
 }
 ```
 
@@ -428,7 +435,7 @@ export interface OpencodeApi {
   unrevertMessage(a: { directory: string; sessionID: string }): Promise<Session>
   forkSession(a: { directory: string; sessionID: string; messageID: string }): Promise<Session>
   agents(directory: string): Promise<Agent[]>
-  searchChats(directory: string, query: string): Promise<ChatSearchHit[]>
+  searchChats(directory: string, query: string, options?: { scope?: ChatSearchScope }): Promise<ChatSearchHit[]>
   prompt(a: { directory: string; sessionID: string; providerID: string; modelID: string; text: string; parts?: PromptPart[]; tools?: Record<string, boolean>; agent?: string }): Promise<void>
   abort(directory: string, sessionID: string): Promise<void>
   providers(): Promise<ProvidersResult>

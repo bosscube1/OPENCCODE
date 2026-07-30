@@ -93,6 +93,9 @@ export type PermissionConfig = {
   external_directory?: PermissionLevel
 }
 
+/** Scope for `oc:search:chats`: the active project only, or every known project. */
+export type ChatSearchScope = 'project' | 'all'
+
 /** One result row from `oc:search:chats`. Importable by renderer streams. */
 export type ChatSearchHit = {
   sessionID: string
@@ -100,6 +103,8 @@ export type ChatSearchHit = {
   messageID: string
   snippet: string
   time: number
+  /** Absolute directory of the project the hit came from (always set, incl. `scope: 'project'`). */
+  directory: string
 }
 
 /** One masked BYOK key row from `oc:keys:list`. Never carries the full key. Importable by renderer. */
@@ -454,7 +459,7 @@ export interface OpencodeApi {
   forkSession(a: ForkArgs): Promise<Session>
   /** The server's agent registry for a directory; the picker filters to primary/all modes. */
   agents(directory: string): Promise<Agent[]>
-  searchChats(directory: string, query: string): Promise<ChatSearchHit[]>
+  searchChats(directory: string, query: string, options?: { scope?: ChatSearchScope }): Promise<ChatSearchHit[]>
   prompt(a: PromptArgs): Promise<void>
   abort(directory: string, sessionID: string): Promise<void>
   providers(): Promise<ProvidersResult>
@@ -609,7 +614,8 @@ const api: OpencodeApi = {
   unrevertMessage: (a) => ipcRenderer.invoke('oc:messages:unrevert', a),
   forkSession: (a) => ipcRenderer.invoke('oc:session:fork', a),
   agents: (directory) => ipcRenderer.invoke('oc:agents:list', directory),
-  searchChats: (directory, query) => ipcRenderer.invoke('oc:search:chats', directory, query),
+  searchChats: (directory, query, options) =>
+    ipcRenderer.invoke('oc:search:chats', directory, query, options),
   prompt: (a) => ipcRenderer.invoke('oc:prompt', a),
   abort: (directory, sessionID) => ipcRenderer.invoke('oc:abort', directory, sessionID),
   providers: () => ipcRenderer.invoke('oc:providers'),

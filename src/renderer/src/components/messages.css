@@ -1550,6 +1550,66 @@
   font-size: 12.5px;
 }
 
+.chatsearch__scope {
+  display: inline-flex;
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.chatsearch__scope-btn {
+  padding: 5px 10px;
+  font-size: 11.5px;
+  color: var(--fg-dim);
+  background: var(--bg-inset);
+  border: none;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 90ms ease, color 90ms ease;
+}
+
+.chatsearch__scope-btn:last-child {
+  border-right: none;
+}
+
+.chatsearch__scope-btn:hover {
+  color: var(--fg);
+}
+
+.chatsearch__scope-btn--active {
+  background: var(--accent-soft);
+  color: var(--fg);
+  font-weight: 580;
+}
+
+.chatsearch__cap-note {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--fg-dim);
+  font-style: italic;
+}
+
+.chatsearch__row--other {
+  opacity: 0.75;
+}
+
+.chatsearch__row--other:not(:disabled):hover {
+  opacity: 1;
+}
+
+.chatsearch__row:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.chatsearch__row-project {
+  font-size: 10px;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
 /* --------------------------------------------------------------------------
    In-session find bar (Ctrl+F) + scroll-to-message highlight
    -------------------------------------------------------------------------- */

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useStore } from '../lib/store'
-import { relativeTime } from '../lib/format'
+import { relativeTime, shortPath } from '../lib/format'
 import { splitHighlight } from '../lib/search'
+import type { ProjectRecord } from '../lib/types'
 
 /** Mirrors the shape returned by `window.api.searchChats` (Stream 2A / preload). */
 type ChatSearchHit = {
@@ -11,7 +12,12 @@ type ChatSearchHit = {
   messageID: string
   snippet: string
   time: number
+  directory: string
 }
+
+type ChatSearchScope = 'project' | 'all'
+
+const RESULT_CAP = 100
 
 /** Dispatched with `{ detail: { messageID: string } }` once the target session is active. */
 export const SCROLL_TO_MESSAGE_EVENT = 'chat:scroll-to-message'
@@ -36,8 +42,11 @@ function Snippet({ text, query }: { text: string; query: string }): ReactNode {
 export function ChatSearch({ open, onClose }: { open: boolean; onClose: () => void }): ReactNode {
   const directory = useStore((s) => s.directory)
   const selectSession = useStore((s) => s.selectSession)
+  const openProject = useStore((s) => s.openProject)
+  const projects = useStore((s) => s.projects)
 
   const [query, setQuery] = useState('')
+  const [scope, setScope] = useState<ChatSearchScope>('project')
   const [results, setResults] = useState<ChatSearchHit[]>([])
   const [loading, setLoading] = useState(false)
   const [searched, setSearched] = useState(false)
@@ -48,6 +57,7 @@ export function ChatSearch({ open, onClose }: { open: boolean; onClose: () => vo
   useEffect(() => {
     if (!open) return
     setQuery('')
+    setScope('project')
     setResults([])
     setSearched(false)
     setErr(null)
@@ -71,7 +81,7 @@ export function ChatSearch({ open, onClose }: { open: boolean; onClose: () => vo
     setLoading(true)
     setErr(null)
     try {
-      const hits = await window.api.searchChats(directory, query.trim())
+      const hits = await window.api.searchChats(directory, query.trim(), { scope })
       setResults(hits)
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
@@ -82,13 +92,27 @@ export function ChatSearch({ open, onClose }: { open: boolean; onClose: () => vo
     }
   }
 
+  /** Project record for a hit's directory, if it's a project the renderer already knows about. */
+  const projectForHit = (hit: ChatSearchHit): ProjectRecord | undefined =>
+    projects.find((p) => p.directory === hit.directory)
+
   const handleClick = (hit: ChatSearchHit): void => {
-    void selectSession(hit.sessionID).then(() => {
+    const isOtherProject = hit.directory !== directory
+    const target = isOtherProject ? projectForHit(hit) : undefined
+    // A hit from another project can only be opened if we can resolve it to a known
+    // project record (so `openProject` has something to switch to). Otherwise it's
+    // shown as identifiable-but-inert rather than silently doing nothing on click.
+    if (isOtherProject && !target) return
+
+    const openAndScroll = async (): Promise<void> => {
+      if (target) await openProject(target)
+      await selectSession(hit.sessionID)
       onClose()
       window.dispatchEvent(
         new CustomEvent(SCROLL_TO_MESSAGE_EVENT, { detail: { messageID: hit.messageID } })
       )
-    })
+    }
+    void openAndScroll()
   }
 
   return (
@@ -119,7 +143,11 @@ export function ChatSearch({ open, onClose }: { open: boolean; onClose: () => vo
                   ref={inputRef}
                   type="text"
                   className="chatsearch__input"
-                  placeholder="Search all sessions in this project…"
+                  placeholder={
+                    scope === 'all'
+                      ? 'Search all sessions in every project…'
+                      : 'Search all sessions in this project…'
+                  }
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   onKeyDown={(e) => {
@@ -127,6 +155,25 @@ export function ChatSearch({ open, onClose }: { open: boolean; onClose: () => vo
                   }}
                 />
                 {loading ? <span className="chatsearch__spinner" aria-hidden="true" /> : null}
+              </div>
+
+              <div className="chatsearch__scope" role="group" aria-label="Search scope">
+                <button
+                  type="button"
+                  className={`chatsearch__scope-btn${scope === 'project' ? ' chatsearch__scope-btn--active' : ''}`}
+                  aria-pressed={scope === 'project'}
+                  onClick={() => setScope('project')}
+                >
+                  This project
+                </button>
+                <button
+                  type="button"
+                  className={`chatsearch__scope-btn${scope === 'all' ? ' chatsearch__scope-btn--active' : ''}`}
+                  aria-pressed={scope === 'all'}
+                  onClick={() => setScope('all')}
+                >
+                  All projects
+                </button>
               </div>
 
               {err !== null ? <p className="chatsearch__error">{err}</p> : null}
@@ -141,23 +188,37 @@ export function ChatSearch({ open, onClose }: { open: boolean; onClose: () => vo
                 </p>
               ) : null}
 
+              {!loading && results.length === RESULT_CAP ? (
+                <p className="chatsearch__cap-note">Showing first {RESULT_CAP} matches — refine your search to see more.</p>
+              ) : null}
+
               <div className="chatsearch__results">
-                {results.map((hit) => (
-                  <button
-                    type="button"
-                    key={`${hit.sessionID}-${hit.messageID}`}
-                    className="chatsearch__row"
-                    onClick={() => handleClick(hit)}
-                  >
-                    <div className="chatsearch__row-head">
-                      <span className="chatsearch__row-title">{hit.title || 'Untitled'}</span>
-                      <span className="chatsearch__row-time">{relativeTime(hit.time)}</span>
-                    </div>
-                    <div className="chatsearch__row-snippet">
-                      <Snippet text={hit.snippet} query={query.trim()} />
-                    </div>
-                  </button>
-                ))}
+                {results.map((hit) => {
+                  const isOtherProject = scope === 'all' && hit.directory !== directory
+                  const target = isOtherProject ? projectForHit(hit) : undefined
+                  const disabled = isOtherProject && !target
+                  return (
+                    <button
+                      type="button"
+                      key={`${hit.sessionID}-${hit.messageID}`}
+                      className={`chatsearch__row${isOtherProject ? ' chatsearch__row--other' : ''}`}
+                      disabled={disabled}
+                      title={disabled ? 'This session belongs to a project that is no longer registered.' : undefined}
+                      onClick={() => handleClick(hit)}
+                    >
+                      <div className="chatsearch__row-head">
+                        <span className="chatsearch__row-title">{hit.title || 'Untitled'}</span>
+                        <span className="chatsearch__row-time">{relativeTime(hit.time)}</span>
+                      </div>
+                      {isOtherProject ? (
+                        <span className="chatsearch__row-project">{shortPath(hit.directory)}</span>
+                      ) : null}
+                      <div className="chatsearch__row-snippet">
+                        <Snippet text={hit.snippet} query={query.trim()} />
+                      </div>
+                    </button>
+                  )
+                })}
               </div>
             </>
           )}
