@@ -3,6 +3,7 @@
  */
 
 import { isFreeModel } from './freeTier'
+import { isViewMode, type ViewMode } from './viewMode'
 
 const PREFS_KEY = 'opencode-desktop:prefs'
 
@@ -28,6 +29,8 @@ export type Prefs = {
   showPaidModels: boolean
   /** `"providerID/modelID"` targets for multi-model fan-out. */
   compareTargets: string[]
+  /** Transcript density: Normal / Verbose / Summary. */
+  viewMode: ViewMode
 }
 
 export const EMPTY_PREFS: Prefs = {
@@ -41,6 +44,7 @@ export const EMPTY_PREFS: Prefs = {
   routingMode: 'failover',
   showPaidModels: false,
   compareTargets: [],
+  viewMode: 'normal',
 }
 
 /** Raw shape that may exist in localStorage (legacy or current). */
@@ -116,6 +120,7 @@ export function loadPrefs(): Prefs {
               return isFreeModel(key.slice(0, sep), key.slice(sep + 1))
             })
         : [],
+      viewMode: isViewMode(parsed.viewMode) ? parsed.viewMode : 'normal',
     }
   } catch {
     return { ...EMPTY_PREFS }
@@ -128,8 +133,11 @@ export function loadPrefs(): Prefs {
  * haven't been updated yet don't clobber routingMode/showPaidModels.
  */
 export function savePrefs(
-  prefs: Omit<Prefs, 'routingMode' | 'showPaidModels' | 'compareTargets' | 'autoRotate' | 'stickyModel'> &
-    Partial<Pick<Prefs, 'routingMode' | 'showPaidModels' | 'compareTargets'>>
+  prefs: Omit<
+    Prefs,
+    'routingMode' | 'showPaidModels' | 'compareTargets' | 'autoRotate' | 'stickyModel' | 'viewMode'
+  > &
+    Partial<Pick<Prefs, 'routingMode' | 'showPaidModels' | 'compareTargets' | 'viewMode'>>
 ): void {
   try {
     const current = loadPrefs()
@@ -143,6 +151,7 @@ export function savePrefs(
       routingMode,
       showPaidModels: prefs.showPaidModels ?? current.showPaidModels,
       compareTargets: prefs.compareTargets ?? current.compareTargets,
+      viewMode: prefs.viewMode ?? current.viewMode,
       autoRotate: routingMode === 'auto',
       stickyModel: routingMode === 'failover',
     }

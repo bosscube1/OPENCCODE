@@ -379,10 +379,13 @@ function RegenerateSplitButton({ messageID }: { messageID: string }): ReactNode 
 
 function MessageViewImpl({
   message,
-  collapseTools = false
+  collapseTools = false,
+  hideTools = false
 }: {
   message: MessageWithParts
   collapseTools?: boolean
+  /** Summary view mode: drop tool cards from the transcript entirely. */
+  hideTools?: boolean
 }): ReactNode {
   const [copiedText, setCopiedText] = useState(false)
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
@@ -509,7 +512,12 @@ function MessageViewImpl({
   const elapsed =
     info.time.completed !== undefined ? info.time.completed - info.time.created : null
 
-  const visible = parts.filter(isRenderable)
+  // Summary mode drops tool cards but keeps `file` parts (attachments the user can see)
+  // and `compaction`/`retry` notices, which explain gaps in the prose rather than adding
+  // to the noise the mode exists to remove.
+  const visible = parts.filter(
+    (part) => isRenderable(part) && !(hideTools && (part.type === 'tool' || part.type === 'subtask'))
+  )
   const lastTextPart = textParts[textParts.length - 1]
   return (
     <article className="msg msg--assistant">
@@ -621,6 +629,10 @@ function MessageViewImpl({
  *  - `message.info.id` — a different message entirely.
  *  - `collapseTools` — orchestrator-driven prop; flips as older messages scroll out
  *    of the "recent" window.
+ *  - `hideTools` — Summary view mode; changes which parts are rendered at all. Like
+ *    `collapseTools` this is a prop, not message state, so it MUST be compared here:
+ *    switching view mode does not touch `message`, so without this line every already-
+ *    mounted message would keep its old density and only new ones would honour the mode.
  *  - `parts.length` — a new part (tool call, file, etc.) appeared.
  *  - the last part's text length — the common case: the tail text/reasoning part
  *    growing character by character during a stream. Not every part has `.text`
@@ -630,10 +642,11 @@ function MessageViewImpl({
  *    touching `parts` at all.
  */
 function messagePropsAreEqual(
-  prev: { message: MessageWithParts; collapseTools?: boolean },
-  next: { message: MessageWithParts; collapseTools?: boolean }
+  prev: { message: MessageWithParts; collapseTools?: boolean; hideTools?: boolean },
+  next: { message: MessageWithParts; collapseTools?: boolean; hideTools?: boolean }
 ): boolean {
   if (prev.collapseTools !== next.collapseTools) return false
+  if (prev.hideTools !== next.hideTools) return false
 
   const prevInfo = prev.message.info
   const nextInfo = next.message.info

@@ -18,11 +18,48 @@
 
 .chat__header-actions {
   display: flex;
+  align-items: center;
+  gap: 8px;
   justify-content: flex-end;
   padding: 6px 12px;
   background: var(--bg-alt);
   border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
+}
+
+/* Normal / Verbose / Summary segmented control. Pushed left so the export button
+   stays anchored at the right edge, where it was before this control existed. */
+.chat__viewmode {
+  display: flex;
+  margin-right: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.chat__viewmode-btn {
+  font-family: inherit;
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.chat__viewmode-btn:last-child {
+  border-right: 0;
+}
+
+.chat__viewmode-btn:hover {
+  color: var(--fg);
+}
+
+.chat__viewmode-btn--active {
+  background: var(--accent);
+  color: var(--bg);
 }
 
 .chat__export-btn {

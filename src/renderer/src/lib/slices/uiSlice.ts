@@ -4,6 +4,7 @@
  */
 
 import { savePrefs, type Theme } from '../prefs'
+import type { ViewMode } from '../viewMode'
 import { compareIds } from '../collections'
 import { api, errText } from './api'
 import type { AppState, SetState, GetState } from './types'
@@ -18,6 +19,8 @@ export type UiSlice = Pick<
   | 'activeArtifactID'
   | 'panelTab'
   | 'paletteOpen'
+  | 'viewMode'
+  | 'setViewMode'
   | 'setActiveView'
   | 'setTheme'
   | 'setActiveArtifactID'
@@ -36,9 +39,16 @@ export function createUiSlice(set: SetState, get: GetState): UiSlice {
     activeArtifactID: null,
     panelTab: null,
     paletteOpen: false,
+    viewMode: 'normal' as ViewMode,
 
     setActiveView(view: 'chats' | 'projects' | 'images'): void {
       set({ activeView: view })
+    },
+
+    setViewMode(mode: ViewMode): void {
+      set({ viewMode: mode })
+      const { directory, providerID, modelID, theme, modelPool, routingMode } = get()
+      savePrefs({ directory, providerID, modelID, theme, modelPool, routingMode, viewMode: mode })
     },
 
     setPanelTab(tab: AppState['panelTab']): void {

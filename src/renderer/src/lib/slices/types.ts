@@ -7,6 +7,7 @@
  */
 
 import type { Theme, RoutingMode } from '../prefs'
+import type { ViewMode } from '../viewMode'
 import type { CompareRun } from '../compare'
 import type {
   AppSettings,
@@ -254,6 +255,9 @@ export interface AppState {
   setPanelTab(tab: AppState['panelTab']): void
   paletteOpen: boolean
   setPaletteOpen(open: boolean): void
+  /** Transcript density: Normal / Verbose / Summary. Persisted in prefs. */
+  viewMode: ViewMode
+  setViewMode(mode: ViewMode): void
 }
 
 /**
