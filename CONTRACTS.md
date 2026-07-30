@@ -118,7 +118,8 @@ Every handler returns `Promise<T>` and **throws** on failure (renderer catches).
                         // generates the filename; a 5 MiB decoded-byte cap is enforced.
                         // Prunes files older than 7 days on each write (best-effort).
 'oc:sessions:list'     (directory: string) => Session[]
-'oc:sessions:create'   (directory: string, title?: string) => Session
+'oc:sessions:create'   (directory: string, title?: string, parentID?: string) => Session
+                       // parentID creates a child session (subagent tab, side chat).
 'oc:sessions:delete'   (directory: string, id: string) => void
 'oc:messages:list'     (directory: string, sessionID: string) => { info: Message; parts: Part[] }[]
 'oc:prompt'            (args: { directory: string; sessionID: string;
@@ -354,7 +355,7 @@ export interface OpencodeApi {
   pickFiles(): Promise<string[]>
   sessions: {
     list(directory: string): Promise<Session[]>
-    create(directory: string, title?: string): Promise<Session>
+    create(directory: string, title?: string, parentID?: string): Promise<Session>
     remove(directory: string, id: string): Promise<void>
     update(directory: string, id: string, title: string): Promise<Session>
     summarize(a: SummarizeArgs): Promise<boolean>

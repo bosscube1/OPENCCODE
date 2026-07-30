@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { useStore } from '../lib/store'
-import { splitSubagentTitle } from '../lib/subagents'
+import { isSideChatTitle, splitSideChatTitle, splitSubagentTitle } from '../lib/subagents'
 import { MessageView } from './MessageView'
 import './subagent-tabs.css'
 
@@ -33,7 +33,13 @@ export function SubagentTabs(): ReactNode {
       </button>
       {tabs.map((id) => {
         const session = sessions.find((s) => s.id === id)
-        const { label, agent } = splitSubagentTitle(session?.title)
+        // A `/btw` side chat and a Task-tool subagent are both child sessions sharing this
+        // tab strip, but they are not the same thing: one is the user's tangent, the other
+        // is the agent's own delegation. The badge distinguishes them.
+        const sideChat = isSideChatTitle(session?.title)
+        const { label, agent } = sideChat
+          ? { ...splitSideChatTitle(session?.title), agent: null }
+          : splitSubagentTitle(session?.title)
         const isActive = active === id
         const error = errors[id]
         return (
@@ -50,6 +56,7 @@ export function SubagentTabs(): ReactNode {
               <span className="subagent-tabs__spinner" role="status" aria-label="Working" />
             ) : null}
             <span className="subagent-tabs__label">{label}</span>
+            {sideChat ? <span className="subagent-tabs__badge">btw</span> : null}
             {agent !== null ? <span className="subagent-tabs__badge">{agent}</span> : null}
             {error !== undefined && error !== null ? (
               <span className="subagent-tabs__errordot" title={error} aria-label="Error" />

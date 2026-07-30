@@ -359,7 +359,8 @@ export interface OpencodeApi {
   pickFiles(): Promise<string[]>
   sessions: {
     list(directory: string): Promise<Session[]>
-    create(directory: string, title?: string): Promise<Session>
+    /** `parentID` creates a child session (subagent tab, `/btw` side chat) instead of a root one. */
+    create(directory: string, title?: string, parentID?: string): Promise<Session>
     remove(directory: string, id: string): Promise<void>
     update(directory: string, id: string, title: string): Promise<Session>
     summarize(a: SummarizeArgs): Promise<boolean>
@@ -527,7 +528,8 @@ const api: OpencodeApi = {
   pickFiles: () => ipcRenderer.invoke('oc:pickFiles'),
   sessions: {
     list: (directory) => ipcRenderer.invoke('oc:sessions:list', directory),
-    create: (directory, title) => ipcRenderer.invoke('oc:sessions:create', directory, title),
+    create: (directory, title, parentID) =>
+      ipcRenderer.invoke('oc:sessions:create', directory, title, parentID),
     remove: (directory, id) => ipcRenderer.invoke('oc:sessions:delete', directory, id),
     update: (directory, id, title) => ipcRenderer.invoke('oc:sessions:update', directory, id, title),
     summarize: (a) => ipcRenderer.invoke('oc:sessions:summarize', a),

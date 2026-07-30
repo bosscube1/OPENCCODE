@@ -405,7 +405,8 @@ export function createSessionSlice(set: SetState, get: GetState): SessionSlice {
 | \`/compact\` | Compact conversation context |
 | \`/init\` | Create a default \`opencode.json\` config file in project folder |
 | \`/cost\` | Display session message statistics and provider metrics |
-| \`/image <prompt>\` | Generate an image with NanoGPT (alias \`/img\`) |`
+| \`/image <prompt>\` | Generate an image with NanoGPT (alias \`/img\`) |
+| \`/btw <question>\` | Ask a tangent in a side-chat tab, leaving this conversation untouched |`
         get().addSystemNotice(helpText)
       } else if (command === '/clear') {
         const sid = get().activeSessionID
@@ -436,6 +437,18 @@ export function createSessionSlice(set: SetState, get: GetState): SessionSlice {
             ? `⚡ **Free Model Auto-Routing is now ENABLED.** OpenCode Desktop will automatically cycle to another free model (Gemini, Groq, OpenRouter, Cerebras, Mistral, Cohere) whenever a 429 rate limit or quota error occurs!\n\nMode: ${describeRoutingMode(nextMode)}`
             : `⚪ **Free Model Auto-Routing is now DISABLED.** ${describeRoutingMode(nextMode)}`
         )
+      } else if (command === '/btw') {
+        // Ask a tangent in a child session so the main transcript — and the main session's
+        // single in-flight exchange slot — stay untouched. The answer streams into its own
+        // tab via the existing subagent event path.
+        const question = cmdText.slice(parts[0].length).trim()
+        if (question.length === 0) {
+          get().addSystemNotice(
+            'Usage: `/btw <question>` — asks a one-off question in a side chat tab, without adding it to this conversation.'
+          )
+        } else {
+          await get().startSideChat(question)
+        }
       } else if (command === '/image' || command === '/img') {
         await runImageCommand(cmdText.slice(parts[0].length).trim(), sessionID!, set, get)
       } else if (command === '/doctor') {

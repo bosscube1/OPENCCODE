@@ -41,7 +41,8 @@ export interface OpencodeApi {
   pickDirectory(): Promise<string | null>
   sessions: {
     list(directory: string): Promise<Session[]>
-    create(directory: string, title?: string): Promise<Session>
+    /** parentID creates a child session (subagent tab, side chat) instead of a root one. */
+    create(directory: string, title?: string, parentID?: string): Promise<Session>
     remove(directory: string, id: string): Promise<void>
     update(directory: string, id: string, title: string): Promise<Session>
     summarize(a: { directory: string; sessionID: string; providerID: string; modelID: string }): Promise<boolean>

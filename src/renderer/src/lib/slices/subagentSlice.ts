@@ -14,7 +14,7 @@
  */
 
 import { eventSessionID } from '../compare'
-import { isDescendantOf } from '../subagents'
+import { isDescendantOf, sideChatTitle } from '../subagents'
 import { isAssistant } from '../types'
 import {
   sortMessages,
@@ -38,6 +38,7 @@ export type SubagentSlice = Pick<
   | 'closeSubagentTab'
   | 'setActiveSubagentTab'
   | 'stopSubagent'
+  | 'startSideChat'
   | 'clearSubagents'
 >
 
@@ -135,6 +136,64 @@ export function createSubagentSlice(set: SetState, get: GetState): SubagentSlice
       } catch (e) {
         set((state) => ({
           subagentError: { ...state.subagentError, [sessionID]: errText(e) }
+        }))
+      }
+    },
+
+    /**
+     * `/btw <question>` — ask a tangent without derailing the main session.
+     *
+     * The side chat is a real CHILD session (`parentID = activeSessionID`), which is what
+     * makes this cheap: `applySubagentEvent` already intercepts strict-descendant traffic
+     * before the main reducer's filters, so the answer streams into `subagentMessages`
+     * and the main transcript never sees it. The tab appears through the same path a
+     * Task-tool subagent uses — the only difference is the title marker and that we focus
+     * it, because the user typed this themselves and wants to watch it.
+     *
+     * Deliberately does NOT touch `busy`, `activeAttempt`, `lastPrompt`, the stall
+     * watchdog, or the routing ledger. Those model the ONE in-flight exchange belonging to
+     * the main session; writing them from here would make the main chat think a side chat's
+     * reply was its own, and could trigger a failover that reverts the wrong session.
+     * Failover and auto-rotation therefore do not apply to side chats — an error is simply
+     * recorded against the tab.
+     */
+    async startSideChat(question: string): Promise<void> {
+      const { directory, activeSessionID, providerID, modelID } = get()
+      if (!directory || !activeSessionID || !providerID || !modelID) return
+
+      const trimmed = question.trim()
+      if (trimmed.length === 0) return
+
+      let child: Session
+      try {
+        child = await api().sessions.create(directory, sideChatTitle(trimmed), activeSessionID)
+      } catch (e) {
+        set({ error: errText(e) })
+        return
+      }
+
+      // Surface the session immediately: `session.created` also arrives over SSE, but the
+      // tab should be there the moment the command returns, not a round-trip later.
+      set((state) => ({
+        sessions: state.sessions.some((s) => s.id === child.id)
+          ? state.sessions
+          : [child, ...state.sessions],
+        subagentBusy: { ...state.subagentBusy, [child.id]: true }
+      }))
+      await get().openSubagentTab(child.id)
+
+      try {
+        await api().prompt({
+          directory,
+          sessionID: child.id,
+          providerID,
+          modelID,
+          text: trimmed
+        })
+      } catch (e) {
+        set((state) => ({
+          subagentBusy: { ...state.subagentBusy, [child.id]: false },
+          subagentError: { ...state.subagentError, [child.id]: errText(e) }
         }))
       }
     },

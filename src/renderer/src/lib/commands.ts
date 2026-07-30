@@ -46,6 +46,11 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     usage: '/doctor'
   },
   {
+    name: '/btw',
+    description: 'Ask a one-off tangent in a side-chat tab, without touching this conversation',
+    usage: '/btw <question>'
+  },
+  {
     name: '/compact',
     description: 'Compact conversation context',
     usage: '/compact',

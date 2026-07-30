@@ -480,13 +480,20 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
 
   ipcMain.handle(
     'oc:sessions:create',
-    async (_event, directoryArg: unknown, titleArg: unknown): Promise<Session> => {
+    async (
+      _event,
+      directoryArg: unknown,
+      titleArg: unknown,
+      parentIDArg: unknown
+    ): Promise<Session> => {
       const directory = requireString(directoryArg, 'directory')
       const title = optionalString(titleArg)
+      // Child sessions (subagent tabs, side chats) pass parentID; omitted for a root session.
+      const parentID = optionalString(parentIDArg)
       return call<Session>(
         getClient().session.create({
           query: { directory },
-          body: title ? { title } : {}
+          body: { ...(title ? { title } : {}), ...(parentID ? { parentID } : {}) }
         })
       )
     }

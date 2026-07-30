@@ -119,6 +119,8 @@ export interface AppState {
   setActiveSubagentTab(sessionID: string | null): void
   /** Abort a running child session (read-only tabs never prompt into it). */
   stopSubagent(sessionID: string): Promise<void>
+  /** `/btw` — open a child session for a tangent question, leaving the main transcript alone. */
+  startSideChat(question: string): Promise<void>
   /** Reset everything — runs on session switch and directory change. */
   clearSubagents(): void
 
