@@ -1,4 +1,4 @@
-import { isValidElement, memo, useCallback, useMemo, useState } from 'react'
+import { isValidElement, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import Markdown from 'react-markdown'
 import type { Components } from 'react-markdown'
@@ -18,6 +18,8 @@ import { ImageLightbox } from './ImageLightbox'
 import { highlightCode } from '../lib/highlight'
 import { extractArtifactsFromMessages } from '../lib/artifacts'
 import { useStore } from '../lib/store'
+import { isAgentModel } from '../lib/models'
+import { isFreeModel } from '../lib/freeTier'
 
 /* ------------------------------------------------------------------ *
  * Local helpers
@@ -266,6 +268,112 @@ function AssistantPart({
 }
 
 /* ------------------------------------------------------------------ *
+ * Regenerate split control
+ * ------------------------------------------------------------------ */
+
+/**
+ * A split button: the primary half keeps the existing one-click "Regenerate" behaviour
+ * (resend with the current store model); the chevron half opens a menu to pick a
+ * different model for this one resend only. Model list uses the same store selectors
+ * and free-vs-paid filter as ModelPicker.tsx, rather than a second list-building path.
+ */
+function RegenerateSplitButton({ messageID }: { messageID: string }): ReactNode {
+  const providers = useStore((s) => s.providers)
+  const showPaidModels = useStore((s) => s.showPaidModels)
+  const [open, setOpen] = useState(false)
+
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const chevRef = useRef<HTMLButtonElement | null>(null)
+
+  const groups = useMemo(() => {
+    return providers
+      .map((p) => ({
+        provider: p,
+        models: Object.values(p.models)
+          .filter((m) => isAgentModel(m))
+          .filter((m) => showPaidModels || isFreeModel(p.id, m.id))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      }))
+      .filter((g) => g.models.length > 0)
+  }, [providers, showPaidModels])
+
+  const close = useCallback(() => setOpen(false), [])
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent): void => {
+      const el = rootRef.current
+      if (el && e.target instanceof Node && !el.contains(e.target)) close()
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        close()
+        chevRef.current?.focus()
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open, close])
+
+  return (
+    <div className="msg__regen" ref={rootRef}>
+      <button
+        type="button"
+        className="msg__retry-btn msg__regen-main"
+        onClick={() => void useStore.getState().retryExchange(messageID)}
+      >
+        Regenerate
+      </button>
+      <button
+        type="button"
+        ref={chevRef}
+        className="msg__retry-btn msg__regen-chev"
+        aria-label="Regenerate with a different model"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        ▾
+      </button>
+      {open ? (
+        <div className="msg__regen-menu" role="menu" aria-label="Choose a model to regenerate with">
+          {groups.length === 0 ? (
+            <div className="msg__regen-empty">No models available.</div>
+          ) : (
+            groups.map((g) => (
+              <div className="msg__regen-group" key={g.provider.id}>
+                <div className="msg__regen-group-head">{g.provider.name}</div>
+                {g.models.map((m) => (
+                  <button
+                    type="button"
+                    key={`${g.provider.id}/${m.id}`}
+                    role="menuitem"
+                    className="msg__regen-item"
+                    onClick={() => {
+                      close()
+                      void useStore
+                        .getState()
+                        .retryExchange(messageID, { providerID: g.provider.id, modelID: m.id })
+                    }}
+                  >
+                    {m.name}
+                  </button>
+                ))}
+              </div>
+            ))
+          )}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ *
  * Message
  * ------------------------------------------------------------------ */
 
@@ -359,6 +467,14 @@ function MessageViewImpl({
                     title="Edit message"
                   >
                     Edit
+                  </button>
+                  <button
+                    type="button"
+                    className="msg__edit-btn msg__branch-btn"
+                    onClick={() => void useStore.getState().branchFromMessage(info.id)}
+                    title="Branch a new conversation from this message"
+                  >
+                    Branch
                   </button>
                 </div>
               )}
@@ -488,13 +604,7 @@ function MessageViewImpl({
             {copiedText ? 'Copied' : 'Copy'}
           </button>
           <span className="msg__sep">·</span>
-          <button
-            type="button"
-            className="msg__retry-btn"
-            onClick={() => useStore.getState().retryExchange(message.info.id)}
-          >
-            Regenerate
-          </button>
+          <RegenerateSplitButton messageID={message.info.id} />
         </footer>
       ) : null}
     </article>

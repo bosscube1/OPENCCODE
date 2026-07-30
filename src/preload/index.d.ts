@@ -90,6 +90,12 @@ export type UnrevertArgs = {
   sessionID: string
 }
 
+export type ForkArgs = {
+  directory: string
+  sessionID: string
+  messageID: string
+}
+
 /** Project-config permission levels, as validated by `oc:config:permission:set`. */
 export type PermissionLevel = 'ask' | 'allow' | 'deny'
 export type PermissionConfig = {
@@ -456,6 +462,8 @@ export interface OpencodeApi {
   revertMessage(a: RevertArgs): Promise<void>
   /** Restores all reverted messages; resolves to the session with `revert` cleared. */
   unrevertMessage(a: UnrevertArgs): Promise<Session>
+  /** Branches a new session from `messageID`, leaving the source session untouched. */
+  forkSession(a: ForkArgs): Promise<Session>
   /** The server's agent registry for a directory; the picker filters to primary/all modes. */
   agents(directory: string): Promise<Agent[]>
   searchChats(directory: string, query: string): Promise<ChatSearchHit[]>

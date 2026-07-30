@@ -5,6 +5,7 @@ import { app, BrowserWindow, desktopCapturer, dialog, session } from 'electron'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { attachContextMenu } from './contextMenu'
 import { initCrashLog, logCrash } from './crashlog'
 import { isTrustedRendererUrl } from './trustedUrl'
 import { createBoundsStore } from './windowBounds'
@@ -132,6 +133,8 @@ function createWindow(): BrowserWindow {
       webviewTag: false
     }
   })
+
+  attachContextMenu(win.webContents)
 
   // Restore maximized state after showing
   win.on('ready-to-show', () => {

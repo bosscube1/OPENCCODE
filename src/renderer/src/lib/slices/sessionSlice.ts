@@ -73,6 +73,7 @@ export type SessionSlice = Pick<
   | 'retryExchange'
   | 'editAndResend'
   | 'unrevertSession'
+  | 'branchFromMessage'
   | 'executeSlashCommand'
   | 'send'
   | 'abort'
@@ -246,9 +247,17 @@ export function createSessionSlice(set: SetState, get: GetState): SessionSlice {
       }))
     },
 
-    async retryExchange(messageID: string): Promise<void> {
+    async retryExchange(
+      messageID: string,
+      override?: { providerID: string; modelID: string }
+    ): Promise<void> {
       const { directory, activeSessionID, providerID, modelID, messages } = get()
-      if (!directory || !activeSessionID || !providerID || !modelID) return
+      // One-shot override for this resend only — never touches the store's providerID/
+      // modelID, setModel, prefs, routingMode, or the pinned model. Falls back to the
+      // current store selection when omitted, exactly as before.
+      const sendProviderID = override?.providerID ?? providerID
+      const sendModelID = override?.modelID ?? modelID
+      if (!directory || !activeSessionID || !sendProviderID || !sendModelID) return
       const msgIndex = messages.findIndex((m) => m.info.id === messageID)
       if (msgIndex < 0) return
       let userText: string | null = null
@@ -266,8 +275,8 @@ export function createSessionSlice(set: SetState, get: GetState): SessionSlice {
         await api().prompt({
           directory,
           sessionID: activeSessionID,
-          providerID,
-          modelID,
+          providerID: sendProviderID,
+          modelID: sendModelID,
           text: userText,
           ...harnessPromptFields(get, activeSessionID)
         })
@@ -308,6 +317,20 @@ export function createSessionSlice(set: SetState, get: GetState): SessionSlice {
         if (session) set((state) => ({ sessions: upsertSession(state.sessions, session) }))
         // The restored messages are back in the server transcript; reload to show them.
         await get().selectSession(activeSessionID)
+      } catch (e) {
+        set({ error: errText(e) })
+      }
+    },
+
+    async branchFromMessage(messageID: string): Promise<void> {
+      const { directory, activeSessionID } = get()
+      if (!directory || !activeSessionID) return
+      try {
+        // Non-destructive: the SDK's native fork creates a brand-new session; the
+        // source session and its messages are left completely untouched.
+        const session = await api().forkSession({ directory, sessionID: activeSessionID, messageID })
+        set((state) => ({ sessions: upsertSession(state.sessions, session) }))
+        await get().selectSession(session.id)
       } catch (e) {
         set({ error: errText(e) })
       }

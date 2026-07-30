@@ -83,6 +83,8 @@ export interface OpencodeApi {
   messages(directory: string, sessionID: string): Promise<MessageWithParts[]>
   revertMessage(a: { directory: string; sessionID: string; messageID: string }): Promise<void>
   unrevertMessage(a: { directory: string; sessionID: string }): Promise<Session>
+  /** Branches a new session from `messageID`, leaving the source session untouched. */
+  forkSession(a: { directory: string; sessionID: string; messageID: string }): Promise<Session>
   agents(directory: string): Promise<Agent[]>
   prompt(a: {
     directory: string

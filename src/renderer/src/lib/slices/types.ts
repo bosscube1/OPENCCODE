@@ -168,10 +168,13 @@ export interface AppState {
   setTheme(t: Theme): void
   queuePrompt(text: string, parts?: PromptPart[]): void
   removeQueued(index: number): void
-  retryExchange(messageID: string): Promise<void>
+  /** `override` is a one-shot providerID/modelID for this resend only; omit to reuse the current store selection. */
+  retryExchange(messageID: string, override?: { providerID: string; modelID: string }): Promise<void>
   editAndResend(messageID: string, newText: string): Promise<void>
   /** Restore a reverted session (unrevert), then reload its transcript. */
   unrevertSession(): Promise<void>
+  /** Branch a new, non-destructive session from `messageID` (server-side fork), then switch to it. */
+  branchFromMessage(messageID: string): Promise<void>
   setActiveArtifactID(id: string | null): void
 
   /* ---- Phase 1 code surface: fs / editor / git / terminal / panel UI ---- */

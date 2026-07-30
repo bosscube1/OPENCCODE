@@ -169,6 +169,12 @@ Every handler returns `Promise<T>` and **throws** on failure (renderer catches).
 'oc:messages:unrevert'  (args: { directory: string; sessionID: string }) => Session
                         // restores all reverted messages; response is the session
                         // with `revert` cleared (renderer upserts it directly).
+'oc:session:fork'      (args: { directory: string; sessionID: string;
+                                 messageID: string }) => Session
+                        // branches a NEW session from messageID via the SDK's native
+                        // session.fork — the source session is left untouched (no
+                        // revert/replay). Renderer upserts the returned session and
+                        // switches to it.
 'oc:agents:list'        (directory: string) => Agent[]
                         // the server's agent registry; the composer picker filters
                         // to mode 'primary' | 'all'.
@@ -419,6 +425,7 @@ export interface OpencodeApi {
   messages(directory: string, sessionID: string): Promise<MessageWithParts[]>
   revertMessage(a: { directory: string; sessionID: string; messageID: string }): Promise<void>
   unrevertMessage(a: { directory: string; sessionID: string }): Promise<Session>
+  forkSession(a: { directory: string; sessionID: string; messageID: string }): Promise<Session>
   agents(directory: string): Promise<Agent[]>
   searchChats(directory: string, query: string): Promise<ChatSearchHit[]>
   prompt(a: { directory: string; sessionID: string; providerID: string; modelID: string; text: string; parts?: PromptPart[]; tools?: Record<string, boolean>; agent?: string }): Promise<void>
@@ -1333,6 +1340,8 @@ setSessionAgent(sessionID: string, agent: string | null): void
 setSessionReadOnly(sessionID: string, readOnly: boolean): void
 // sessionSlice also owns unrevertSession(): oc:messages:unrevert, upserts the returned
 // session (revert cleared), then reloads the transcript.
+// sessionSlice also owns branchFromMessage(messageID): oc:session:fork, upserts the
+// returned (new, non-destructive) session, then switches to it via selectSession.
 ```
 
 Renderer-internal drag contract: dragging a file out of the tree sets the MIME type

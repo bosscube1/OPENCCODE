@@ -1170,6 +1170,85 @@
   background: var(--bg-inset);
 }
 
+.msg__branch-btn {
+  /* Inherits .msg__edit-btn's tokens; no destructive confirm, so no extra warn colour. */
+}
+
+/* ================================== regenerate split control ========= */
+
+.msg__regen {
+  position: relative;
+  display: inline-flex;
+  margin-top: 6px;
+}
+
+.msg__regen-main {
+  margin-top: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: none;
+}
+
+.msg__regen-chev {
+  margin-top: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  padding: 2px 6px;
+}
+
+.msg__regen-menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  min-width: 220px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  padding: 4px;
+  z-index: 20;
+}
+
+.msg__regen-group + .msg__regen-group {
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 4px;
+}
+
+.msg__regen-group-head {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-dim);
+  padding: 4px 8px 2px;
+}
+
+.msg__regen-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 8px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.msg__regen-item:hover {
+  background: var(--bg-inset);
+}
+
+.msg__regen-empty {
+  font-size: 12px;
+  color: var(--fg-dim);
+  padding: 6px 8px;
+}
+
 /* ================================== todo panel ====================== */
 
 .todo-panel {

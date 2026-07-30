@@ -134,6 +134,7 @@ const CHANNELS = [
   'oc:saveFile',
   'oc:messages:revert',
   'oc:messages:unrevert',
+  'oc:session:fork',
   'oc:agents:list',
   'oc:config:permission:get',
   'oc:config:permission:set',
@@ -895,6 +896,21 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
     // reverted-state banner without waiting on the session.updated SSE event.
     return call<Session>(
       getClient().session.unrevert({ path: { id: sessionID }, query: { directory } })
+    )
+  })
+
+  ipcMain.handle('oc:session:fork', async (_event, argsArg: unknown): Promise<Session> => {
+    const args = requireObject(argsArg, 'fork args')
+    const directory = requireString(args.directory, 'directory')
+    const sessionID = requireString(args.sessionID, 'sessionID')
+    const messageID = requireString(args.messageID, 'messageID')
+    // The server creates the branched session and returns it — no revert/replay needed.
+    return call<Session>(
+      getClient().session.fork({
+        path: { id: sessionID },
+        query: { directory },
+        body: { messageID }
+      })
     )
   })
 
