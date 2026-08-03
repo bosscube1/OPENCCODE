@@ -69,7 +69,20 @@ function nodeText(node: ReactNode): string {
   return ''
 }
 
-function CodeBlock({ language, code }: { language: string; code: string }): ReactNode {
+/**
+ * Memoised on (language, code). During a stream the tail message re-renders on every
+ * token, and react-markdown hands us a fresh element tree each time — so without this,
+ * highlight.js re-ran over every code block in the message per token. Measured cost:
+ * 1.3ms at 1.4KB, 3.8ms at 7KB, 10.6ms at 21KB, each token. The props are two primitives,
+ * so the default shallow compare is exactly the right check.
+ */
+const CodeBlock = memo(function CodeBlock({
+  language,
+  code
+}: {
+  language: string
+  code: string
+}): ReactNode {
   const [copied, setCopied] = useState(false)
 
   const copy = useCallback(() => {
@@ -84,7 +97,9 @@ function CodeBlock({ language, code }: { language: string; code: string }): Reac
     })()
   }, [code])
 
-  const html = highlightCode(code, language)
+  // Belt and braces with the memo above: a re-render for any other reason (the copy
+  // button's own state, most obviously) must not re-tokenise the block.
+  const html = useMemo(() => highlightCode(code, language), [code, language])
 
   return (
     <div className="msg__codeblock">
@@ -106,7 +121,7 @@ function CodeBlock({ language, code }: { language: string; code: string }): Reac
       </pre>
     </div>
   )
-}
+})
 
 const markdownComponents: Components = {
   pre({ children }) {

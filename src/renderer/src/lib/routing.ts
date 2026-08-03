@@ -477,6 +477,31 @@ export function underModelRateCaps(ledger: Ledger, key: ModelKey, caps: ModelCap
 }
 
 /**
+ * How slow a turn has to get before the latency penalty saturates.
+ *
+ * This used to be a linear `min(1, ewma / 5000)`, which pinned every model slower than
+ * 5s to an identical penalty of 1.0 — so a 6s model and a 74s model scored the same and
+ * latency dropped out of selection entirely, which is the exact range where it matters.
+ * Log scaling to a 2-minute horizon keeps the term meaningful across the whole spread:
+ * ~6s → 0.40, ~22s → 0.65, ~74s → 0.90.
+ *
+ * The horizon is a judgement call, not a derived constant. Widen it if real turns start
+ * exceeding it routinely.
+ */
+export const LATENCY_HORIZON_MS = 120_000
+
+const LATENCY_LOG_SCALE = Math.log10(1 + LATENCY_HORIZON_MS / 1000)
+
+/**
+ * Penalty in [0, 1] for a model's measured whole-turn latency. `null` (never completed a
+ * turn) scores 0 so an unmeasured model is not punished for lack of data.
+ */
+export function latencyPenaltyFor(latencyEwma: number | null): number {
+  if (latencyEwma === null || !Number.isFinite(latencyEwma) || latencyEwma <= 0) return 0
+  return Math.min(1, Math.log10(1 + latencyEwma / 1000) / LATENCY_LOG_SCALE)
+}
+
+/**
  * Score and select the optimal model from a pool based on health ledger statistics.
  */
 export function selectModel(
@@ -523,7 +548,7 @@ export function selectModel(
     const h = ledger[key] ?? DEFAULT_HEALTH
     const total = h.success + h.error
     const successRatio = total > 0 ? h.success / total : 1.0
-    const latencyPenalty = h.latencyEwma !== null ? Math.min(1.0, h.latencyEwma / 5000) : 0.0
+    const latencyPenalty = latencyPenaltyFor(h.latencyEwma)
     const recent429Penalty = h.last429 !== null ? Math.max(0, 1 - (now - h.last429) / 3600000) : 0.0
 
     const healthScore = successRatio - latencyPenalty * 0.3 - recent429Penalty * 0.5

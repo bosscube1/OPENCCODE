@@ -5,6 +5,7 @@ import { useStore } from '../lib/store'
 import { isAgentModel } from '../lib/models'
 import { isFreeModel, isSubscriptionProvider } from '../lib/freeTier'
 import { isAutoRoutingActive } from '../lib/routing'
+import { getLedger } from '../lib/slices/attemptMachine'
 
 /** Dispatched by App.tsx on Ctrl+K. */
 const FOCUS_MODEL_EVENT = 'opencode-desktop:focus-model'
@@ -32,6 +33,26 @@ function formatContext(n: number): string {
   }
   if (n >= 1000) return `${Math.round(n / 1000)}K`
   return String(n)
+}
+
+/**
+ * Whole-turn latency at or above which a model is flagged as slow rather than merely
+ * measured. Picked off observed data: free/subscription chat models land under ~10s,
+ * while `:thinking` and reasoning-heavy relays run 60-90s. 30s sits in the empty gap
+ * between the two clusters.
+ */
+const SLOW_TURN_MS = 30_000
+
+/**
+ * The ledger stores whole-turn latency (send → `session.idle`), so this includes tool
+ * round-trips, not just token generation. Rounded coarsely on purpose — it is a triage
+ * signal for "which of these is going to make me wait", not a benchmark.
+ */
+function formatLatency(ms: number): string {
+  if (ms < 1000) return '<1s'
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`
+  const minutes = ms / 60_000
+  return `${minutes >= 10 ? Math.round(minutes) : Math.round(minutes * 10) / 10}m`
 }
 
 /** Label shown beside a provider group header, or null for providers that bill per request. */
@@ -95,6 +116,24 @@ export function ModelPicker({ compact = false }: { compact?: boolean } = {}): JS
     () => groups.flatMap((g) => g.models.map((m) => ({ providerID: g.provider.id, modelID: m.id }))),
     [groups]
   )
+
+  /**
+   * Snapshot of measured latency per model key, taken when the picker opens.
+   *
+   * The ledger is a module singleton outside React, so it cannot be subscribed to — but it
+   * only changes when a turn completes, and no turn can complete between opening this
+   * dropdown and choosing from it. Re-reading on each open is therefore always current.
+   */
+  const latencyByKey = useMemo(() => {
+    if (!open) return {} as Record<string, number>
+    const out: Record<string, number> = {}
+    for (const [key, health] of Object.entries(getLedger())) {
+      if (typeof health.latencyEwma === 'number' && health.latencyEwma > 0) {
+        out[key] = health.latencyEwma
+      }
+    }
+    return out
+  }, [open])
 
   const current = useMemo(() => {
     if (!providerID || !modelID) return null
@@ -294,6 +333,7 @@ export function ModelPicker({ compact = false }: { compact?: boolean } = {}): JS
                   const idx = index
                   const selected = g.provider.id === providerID && m.id === modelID
                   const ctx = formatContext(m.limit.context)
+                  const latency = latencyByKey[`${g.provider.id}/${m.id}`]
                   const cls = [
                     'modelpicker__opt',
                     idx === cursor ? 'modelpicker__opt--active' : '',
@@ -316,6 +356,18 @@ export function ModelPicker({ compact = false }: { compact?: boolean } = {}): JS
                       <span className="modelpicker__opt-main">
                         <span className="modelpicker__opt-name">{m.name}</span>
                         <span className="modelpicker__badges">
+                          {latency !== undefined && (
+                            <span
+                              className={
+                                latency >= SLOW_TURN_MS
+                                  ? 'modelpicker__badge modelpicker__badge--warn'
+                                  : 'modelpicker__badge'
+                              }
+                              title={`Average whole-turn time measured on this machine: ${Math.round(latency / 1000)}s (includes tool calls).`}
+                            >
+                              ~{formatLatency(latency)}
+                            </span>
+                          )}
                           {m.capabilities.reasoning && (
                             <span className="modelpicker__badge">reasoning</span>
                           )}

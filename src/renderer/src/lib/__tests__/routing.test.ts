@@ -8,6 +8,8 @@ import {
   underModelRateCaps,
   releaseAttempt,
   selectModel,
+  latencyPenaltyFor,
+  LATENCY_HORIZON_MS,
   parseModelKey,
   codingQuality,
   loadLedger,
@@ -177,9 +179,77 @@ describe('Smart routing v2 (routing.ts)', () => {
     })
   })
 
+  describe('latencyPenaltyFor', () => {
+    it('scores an unmeasured model as unpenalised', () => {
+      expect(latencyPenaltyFor(null)).toBe(0)
+      expect(latencyPenaltyFor(0)).toBe(0)
+      expect(latencyPenaltyFor(Number.NaN)).toBe(0)
+    })
+
+    it('separates models that are all slower than the old 5s saturation point', () => {
+      // The regression this guards: `min(1, ewma / 5000)` returned 1.0 for every one of
+      // these, so a 6s model and a 74s model were indistinguishable to the scorer.
+      const fast = latencyPenaltyFor(5_841)
+      const middling = latencyPenaltyFor(22_410)
+      const slow = latencyPenaltyFor(74_125)
+
+      expect(fast).toBeLessThan(middling)
+      expect(middling).toBeLessThan(slow)
+      // The spread must exceed the quality term's full range (0.12), or a slow model can
+      // still win on the coding-quality tiebreak alone.
+      expect(slow - fast).toBeGreaterThan(0.12)
+    })
+
+    it('saturates at the horizon and never exceeds 1', () => {
+      expect(latencyPenaltyFor(LATENCY_HORIZON_MS)).toBeCloseTo(1, 5)
+      expect(latencyPenaltyFor(LATENCY_HORIZON_MS * 10)).toBe(1)
+    })
+
+    it('is monotonic in latency', () => {
+      let previous = -1
+      for (const ms of [500, 1_000, 5_000, 10_000, 30_000, 60_000, 120_000]) {
+        const penalty = latencyPenaltyFor(ms)
+        expect(penalty).toBeGreaterThan(previous)
+        previous = penalty
+      }
+    })
+  })
+
   describe('selectModel', () => {
     const available = new Set([modelA, modelB, modelC])
     const caps: ModelCapsMap = {}
+
+    it('prefers a measurably faster model over a slower higher-quality one', () => {
+      // modelC (gpt-oss) outranks modelA (generic flash) on coding quality — the test
+      // above at :195 relies on exactly that. A 13x latency gap must overturn it.
+      const ledger: Ledger = {
+        [modelA]: {
+          cooldownUntil: 0,
+          cooldownMs: 30000,
+          success: 3,
+          error: 0,
+          last429: null,
+          latencyEwma: 5_841,
+          sends: []
+        },
+        [modelC]: {
+          cooldownUntil: 0,
+          cooldownMs: 30000,
+          success: 3,
+          error: 0,
+          last429: null,
+          latencyEwma: 74_125,
+          sends: []
+        }
+      }
+      const picked = selectModel([modelC, modelA], ledger, caps, now, {
+        sticky: false,
+        current: null,
+        available,
+        authenticatedProviders: new Set(['google', 'groq', 'cerebras'])
+      })
+      expect(picked).toBe(modelA)
+    })
 
     it('honors sticky mode if sticky model is healthy and available', () => {
       const ledger: Ledger = {}
