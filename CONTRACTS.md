@@ -118,7 +118,8 @@ Every handler returns `Promise<T>` and **throws** on failure (renderer catches).
                         // generates the filename; a 5 MiB decoded-byte cap is enforced.
                         // Prunes files older than 7 days on each write (best-effort).
 'oc:sessions:list'     (directory: string) => Session[]
-'oc:sessions:create'   (directory: string, title?: string) => Session
+'oc:sessions:create'   (directory: string, title?: string, parentID?: string) => Session
+                       // parentID creates a child session (subagent tab, side chat).
 'oc:sessions:delete'   (directory: string, id: string) => void
 'oc:messages:list'     (directory: string, sessionID: string) => { info: Message; parts: Part[] }[]
 'oc:prompt'            (args: { directory: string; sessionID: string;
@@ -169,6 +170,12 @@ Every handler returns `Promise<T>` and **throws** on failure (renderer catches).
 'oc:messages:unrevert'  (args: { directory: string; sessionID: string }) => Session
                         // restores all reverted messages; response is the session
                         // with `revert` cleared (renderer upserts it directly).
+'oc:session:fork'      (args: { directory: string; sessionID: string;
+                                 messageID: string }) => Session
+                        // branches a NEW session from messageID via the SDK's native
+                        // session.fork — the source session is left untouched (no
+                        // revert/replay). Renderer upserts the returned session and
+                        // switches to it.
 'oc:agents:list'        (directory: string) => Agent[]
                         // the server's agent registry; the composer picker filters
                         // to mode 'primary' | 'all'.
@@ -180,9 +187,13 @@ Every handler returns `Promise<T>` and **throws** on failure (renderer catches).
                         // (known keys, ask|allow|deny; bash may be a pattern map).
                         // Uses config.update; on failure rewrites opencode.json
                         // atomically + restarts the server (returns true).
-'oc:search:chats'       (directory: string, query: string) => ChatSearchHit[]
-                        // global chat-content search, runs in main with a
-                        // bounded (concurrency 4) message-fetch pool + LRU cache.
+'oc:search:chats'       (directory: string, query: string, options?: { scope?: 'project' | 'all' }) => ChatSearchHit[]
+                        // chat-content search, runs in main with a bounded
+                        // (concurrency 4) per-directory message-fetch pool + LRU cache.
+                        // scope defaults to 'project' (current directory only, unchanged
+                        // behaviour); 'all' additionally searches every directory from
+                        // listProjects(), fanned out through the same pool helper at
+                        // concurrency 2 so total fan-out stays bounded.
 'oc:saveFile'           (args: { defaultName: string; content: string }) => boolean
                         // generalized save dialog for artifact export/download
 
@@ -258,8 +269,11 @@ and never read back in the clear across the bridge.
 `ChatSearchHit` (exported from `src/preload/index.ts`, importable by the renderer):
 
 ```ts
+export type ChatSearchScope = 'project' | 'all'
+
 export type ChatSearchHit = {
   sessionID: string; title: string; messageID: string; snippet: string; time: number
+  directory: string // absolute directory the hit came from; always set
 }
 ```
 
@@ -348,7 +362,7 @@ export interface OpencodeApi {
   pickFiles(): Promise<string[]>
   sessions: {
     list(directory: string): Promise<Session[]>
-    create(directory: string, title?: string): Promise<Session>
+    create(directory: string, title?: string, parentID?: string): Promise<Session>
     remove(directory: string, id: string): Promise<void>
     update(directory: string, id: string, title: string): Promise<Session>
     summarize(a: SummarizeArgs): Promise<boolean>
@@ -419,8 +433,9 @@ export interface OpencodeApi {
   messages(directory: string, sessionID: string): Promise<MessageWithParts[]>
   revertMessage(a: { directory: string; sessionID: string; messageID: string }): Promise<void>
   unrevertMessage(a: { directory: string; sessionID: string }): Promise<Session>
+  forkSession(a: { directory: string; sessionID: string; messageID: string }): Promise<Session>
   agents(directory: string): Promise<Agent[]>
-  searchChats(directory: string, query: string): Promise<ChatSearchHit[]>
+  searchChats(directory: string, query: string, options?: { scope?: ChatSearchScope }): Promise<ChatSearchHit[]>
   prompt(a: { directory: string; sessionID: string; providerID: string; modelID: string; text: string; parts?: PromptPart[]; tools?: Record<string, boolean>; agent?: string }): Promise<void>
   abort(directory: string, sessionID: string): Promise<void>
   providers(): Promise<ProvidersResult>
@@ -1333,6 +1348,8 @@ setSessionAgent(sessionID: string, agent: string | null): void
 setSessionReadOnly(sessionID: string, readOnly: boolean): void
 // sessionSlice also owns unrevertSession(): oc:messages:unrevert, upserts the returned
 // session (revert cleared), then reloads the transcript.
+// sessionSlice also owns branchFromMessage(messageID): oc:session:fork, upserts the
+// returned (new, non-destructive) session, then switches to it via selectSession.
 ```
 
 Renderer-internal drag contract: dragging a file out of the tree sets the MIME type

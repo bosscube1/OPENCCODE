@@ -61,8 +61,70 @@ export function taskChildSessionId(part: ToolPart): string | undefined {
   return typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : undefined
 }
 
+/**
+ * Direct child sessions of `parentID`, oldest-first. These are what the sidebar's subagent
+ * section lists: Task-tool subagents and `/btw` side chats share the same `parentID` link,
+ * and the tab strip renders both. Strictly direct children — a nested subagent belongs to
+ * its own parent's section, not the root's.
+ */
+export function childSessionsOf(
+  sessions: readonly Session[],
+  parentID: string | null | undefined
+): Session[] {
+  if (!parentID) return []
+  return sessions
+    .filter((s) => s.parentID === parentID)
+    .sort((a, b) => (a.time?.created ?? 0) - (b.time?.created ?? 0))
+}
+
 /** Matches the trailing ` (@<agent> subagent)` the server appends to child session titles. */
 const SUBAGENT_TITLE_SUFFIX = /\s*\(@([^()]+?)\s+subagent\)\s*$/
+
+/**
+ * Appended to a `/btw` side chat's title so its tab is distinguishable from a real
+ * Task-tool subagent, even though both are child sessions rendered by the same tab
+ * strip. A subagent is the agent's own Task call; a side chat is the user's `/btw`.
+ */
+export const SIDE_CHAT_TITLE_SUFFIX = ' (side chat)'
+
+/** Matches the trailing ` (side chat)` marker `/btw` appends to its child session titles. */
+const SIDE_CHAT_TITLE_SUFFIX_RE = /\s*\(side chat\)\s*$/
+
+/** Longest question fragment kept in a side-chat tab title before ellipsis. */
+const SIDE_CHAT_LABEL_MAX = 40
+
+/**
+ * Build the child session title for a `/btw` question: a trimmed, single-line, length-capped
+ * fragment of the question plus the marker. Newlines are collapsed because the title renders
+ * in a one-line tab, and any pre-existing marker in the user's text is stripped so
+ * `isSideChatTitle` cannot be spoofed into double-marking.
+ */
+export function sideChatTitle(question: string): string {
+  const flat = question.replace(/\s+/g, ' ').replace(SIDE_CHAT_TITLE_SUFFIX_RE, '').trim()
+  if (flat === '') return `Side chat${SIDE_CHAT_TITLE_SUFFIX}`
+  const label =
+    flat.length > SIDE_CHAT_LABEL_MAX ? `${flat.slice(0, SIDE_CHAT_LABEL_MAX - 1).trimEnd()}…` : flat
+  return `${label}${SIDE_CHAT_TITLE_SUFFIX}`
+}
+
+/** True when `title` carries the `/btw` side-chat marker (never true for a subagent title). */
+export function isSideChatTitle(title: string | null | undefined): boolean {
+  return typeof title === 'string' && SIDE_CHAT_TITLE_SUFFIX_RE.test(title)
+}
+
+/**
+ * Split a side chat title (`"<question> (side chat)"`) into its tab label. Mirrors
+ * `splitSubagentTitle`'s shape but a side chat has no agent badge — it is the user's
+ * own tangent, not a Task-tool call. Titles that do not carry the marker come back
+ * whole; empty input falls back to a generic label so a tab never renders blank.
+ */
+export function splitSideChatTitle(title: string | null | undefined): { label: string } {
+  if (typeof title !== 'string' || title.trim() === '') return { label: 'Side chat' }
+  const match = SIDE_CHAT_TITLE_SUFFIX_RE.exec(title)
+  if (match === null) return { label: title }
+  const label = title.slice(0, match.index).trim()
+  return { label: label.length > 0 ? label : 'Side chat' }
+}
 
 /**
  * Split a child session title (`"<desc> (@<agent> subagent)"`) into the tab label and the

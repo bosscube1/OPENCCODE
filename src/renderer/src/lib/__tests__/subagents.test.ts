@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { isDescendantOf, isSelfOrDescendant, splitSubagentTitle, taskChildSessionId } from '../subagents'
+import { childSessionsOf, isDescendantOf, isSelfOrDescendant, splitSubagentTitle, taskChildSessionId } from '../subagents'
 import type { Session, ToolPart, ToolState } from '../types'
 
-function makeSession(id: string, parentID?: string): Session {
+function makeSession(id: string, parentID?: string, created = 1): Session {
   return {
     id,
     parentID,
     directory: '/proj',
     projectID: 'p1',
     title: id,
-    time: { created: 1, updated: 1 }
+    time: { created, updated: created }
   } as unknown as Session
 }
 
@@ -152,5 +152,31 @@ describe('splitSubagentTitle', () => {
     expect(splitSubagentTitle(null)).toEqual({ label: 'Subagent', agent: null })
     expect(splitSubagentTitle('   ')).toEqual({ label: 'Subagent', agent: null })
     expect(splitSubagentTitle('(@scout subagent)')).toEqual({ label: 'Subagent', agent: 'scout' })
+  })
+})
+
+describe('childSessionsOf', () => {
+  const sessions = [
+    makeSession('root'),
+    makeSession('child-b', 'root', 2),
+    makeSession('child-a', 'root', 1),
+    makeSession('grandchild', 'child-a', 3),
+    makeSession('unrelated')
+  ]
+
+  it('returns direct children only, oldest-first', () => {
+    expect(childSessionsOf(sessions, 'root').map((s) => s.id)).toEqual(['child-a', 'child-b'])
+  })
+
+  it('does not pull grandchildren into the root section', () => {
+    expect(childSessionsOf(sessions, 'root')).toHaveLength(2)
+    expect(childSessionsOf(sessions, 'child-a').map((s) => s.id)).toEqual(['grandchild'])
+  })
+
+  it('is empty for missing parents, leaf sessions, and null/undefined ids', () => {
+    expect(childSessionsOf(sessions, 'unrelated')).toEqual([])
+    expect(childSessionsOf(sessions, null)).toEqual([])
+    expect(childSessionsOf(sessions, undefined)).toEqual([])
+    expect(childSessionsOf([], 'root')).toEqual([])
   })
 })

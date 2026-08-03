@@ -4,6 +4,17 @@ import type { Session } from '@opencode-ai/sdk'
 import { useStore } from '../lib/store'
 import { relativeTime, shortPath } from '../lib/format'
 import { isCompareSessionTitle } from '../lib/compare'
+import { childSessionsOf, isSideChatTitle, splitSideChatTitle, splitSubagentTitle } from '../lib/subagents'
+import {
+  loadSessionMeta,
+  saveSessionMeta,
+  setSessionMeta,
+  isPinned,
+  isArchived,
+  pruneSessionMeta,
+  compareSessions,
+  type SessionMetaMap
+} from '../lib/sessionMeta'
 import { ModelPicker } from './ModelPicker'
 import { ProviderPanel } from './ProviderPanel'
 
@@ -35,6 +46,8 @@ export function Sidebar({ onOpenLiveScreen }: { onOpenLiveScreen?: () => void })
   const renameSession = useStore((s) => s.renameSession)
   const activeView = useStore((s) => s.activeView)
   const setActiveView = useStore((s) => s.setActiveView)
+  const subagentBusy = useStore((s) => s.subagentBusy)
+  const openSubagentTab = useStore((s) => s.openSubagentTab)
 
   const [providersOpen, setProvidersOpen] = useState(false)
   const [confirmID, setConfirmID] = useState<string | null>(null)
@@ -43,6 +56,10 @@ export function Sidebar({ onOpenLiveScreen }: { onOpenLiveScreen?: () => void })
   const [editingSessionID, setEditingSessionID] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState('')
   const [showCompareRuns, setShowCompareRuns] = useState(false)
+  const [showArchived, setShowArchived] = useState(false)
+  const [sessionMeta, setSessionMetaState] = useState<SessionMetaMap>(() => loadSessionMeta())
+  const [selectedIDs, setSelectedIDs] = useState<Set<string>>(() => new Set())
+  const [bulkConfirm, setBulkConfirm] = useState(false)
 
   /* keep relative timestamps honest without a per-second re-render */
   useEffect(() => {
@@ -61,9 +78,63 @@ export function Sidebar({ onOpenLiveScreen }: { onOpenLiveScreen?: () => void })
     if (confirmID !== null && !sessions.some((s) => s.id === confirmID)) setConfirmID(null)
   }, [sessions, confirmID])
 
+  /* selection entries for sessions that vanish from the list must not survive either */
+  useEffect(() => {
+    setSelectedIDs((prev) => {
+      if (prev.size === 0) return prev
+      const liveIDs = new Set(sessions.map((s) => s.id))
+      const next = new Set([...prev].filter((id) => liveIDs.has(id)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [sessions])
+
+  /* the meta map must not grow forever — prune entries for sessions the server no longer knows about */
+  useEffect(() => {
+    setSessionMetaState((prev) => {
+      const pruned = pruneSessionMeta(prev, sessions.map((s) => s.id))
+      if (pruned !== prev) saveSessionMeta(pruned)
+      return pruned
+    })
+  }, [sessions])
+
+  const updateMeta = useCallback((id: string, patch: { pinned?: boolean; archived?: boolean }) => {
+    setSessionMetaState((prev) => {
+      const next = setSessionMeta(prev, id, patch)
+      saveSessionMeta(next)
+      return next
+    })
+  }, [])
+
+  /* the pending bulk-delete confirmation must not survive the selection emptying out */
+  useEffect(() => {
+    if (selectedIDs.size === 0 && bulkConfirm) setBulkConfirm(false)
+  }, [selectedIDs, bulkConfirm])
+
   const compareCount = useMemo(
     () => sessions.filter((s) => !s.parentID && isCompareSessionTitle(s.title)).length,
     [sessions]
+  )
+
+  // The active session's child sessions (Task-tool subagents and `/btw` side chats). These
+  // are hidden from the Recents list by the `!s.parentID` filter, so without this section
+  // there is no way back into a subagent tab once it has been closed or cleared by a
+  // session switch — short of scrolling the transcript for the Task tool call.
+  const subagentChildren = useMemo(
+    () => childSessionsOf(sessions, activeSessionID),
+    [sessions, activeSessionID]
+  )
+
+  // Bulk operations must never sweep up compare-run sessions or subagent/side-chat sessions —
+  // this is the same predicate `ordered` below applies, exported here so the bulk-delete handler
+  // can re-filter the (possibly stale) selection against it rather than trusting stored state.
+  const isBulkEligible = useCallback(
+    (s: Session) => !s.parentID && !isCompareSessionTitle(s.title),
+    []
+  )
+
+  const archivedCount = useMemo(
+    () => sessions.filter((s) => isBulkEligible(s) && isArchived(sessionMeta, s.id)).length,
+    [sessions, sessionMeta, isBulkEligible]
   )
 
   const ordered = useMemo(() => {
@@ -73,12 +144,13 @@ export function Sidebar({ onOpenLiveScreen }: { onOpenLiveScreen?: () => void })
     // chats. Hidden by default behind the toggle below rather than deleted, so a run stays
     // recoverable.
     if (!showCompareRuns) res = res.filter((s) => !isCompareSessionTitle(s.title))
+    if (!showArchived) res = res.filter((s) => !isArchived(sessionMeta, s.id))
     if (searchQuery.trim()) {
       const lower = searchQuery.trim().toLowerCase()
       res = res.filter((s) => (s.title || 'Untitled').toLowerCase().includes(lower))
     }
-    return res.sort((a, b) => stamp(b) - stamp(a))
-  }, [sessions, tick, searchQuery, showCompareRuns])
+    return res.sort((a, b) => compareSessions(sessionMeta, { id: a.id, stamp: stamp(a) }, { id: b.id, stamp: stamp(b) }))
+  }, [sessions, tick, searchQuery, showCompareRuns, showArchived, sessionMeta])
 
   const commitRename = useCallback(
     (id: string) => {
@@ -104,6 +176,27 @@ export function Sidebar({ onOpenLiveScreen }: { onOpenLiveScreen?: () => void })
   const handleEditBlur = (id: string) => {
     commitRename(id)
   }
+
+  const toggleSelected = useCallback((id: string) => {
+    setSelectedIDs((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
+  const runBulkDelete = useCallback(async () => {
+    setBulkConfirm(false)
+    // Re-filter against the live eligibility predicate rather than trusting stored selection —
+    // it can survive a toggle change (e.g. show-compare-runs) and must never sweep up compare or
+    // subagent/side-chat sessions.
+    const idsToDelete = sessions.filter((s) => selectedIDs.has(s.id) && isBulkEligible(s)).map((s) => s.id)
+    setSelectedIDs(new Set())
+    for (const id of idsToDelete) {
+      await deleteSession(id)
+    }
+  }, [sessions, selectedIDs, isBulkEligible, deleteSession])
 
   return (
     <div className="sidebar">
@@ -213,7 +306,96 @@ export function Sidebar({ onOpenLiveScreen }: { onOpenLiveScreen?: () => void })
                 Show {compareCount} compare session{compareCount === 1 ? '' : 's'}
               </label>
             )}
+            {archivedCount > 0 && (
+              <label
+                className="sidebar__compare-toggle"
+                title="Archived sessions are hidden from the list by default"
+              >
+                <input
+                  type="checkbox"
+                  checked={showArchived}
+                  onChange={(e) => setShowArchived(e.target.checked)}
+                />
+                Show {archivedCount} archived session{archivedCount === 1 ? '' : 's'}
+              </label>
+            )}
           </div>
+
+          {subagentChildren.length > 0 && (
+            <div className="sidebar__subagents">
+              <div className="sidebar__listhead">
+                <span className="sidebar__label">Subagents</span>
+                <span className="sidebar__count">{subagentChildren.length}</span>
+              </div>
+              {subagentChildren.map((child) => {
+                const sideChat = isSideChatTitle(child.title)
+                const { label, agent } = sideChat
+                  ? { ...splitSideChatTitle(child.title), agent: null }
+                  : splitSubagentTitle(child.title)
+                return (
+                  <button
+                    key={child.id}
+                    type="button"
+                    className="sidebar__subagent"
+                    title={`${child.title}\nOpen in a chat tab`}
+                    onClick={() => {
+                      setActiveView('chats')
+                      void openSubagentTab(child.id)
+                    }}
+                  >
+                    {subagentBusy[child.id] === true ? (
+                      <span className="sidebar__subagent-spinner" role="status" aria-label="Working" />
+                    ) : null}
+                    <span className="sidebar__subagent-label">{label}</span>
+                    {sideChat ? <span className="sidebar__subagent-badge">btw</span> : null}
+                    {agent !== null ? <span className="sidebar__subagent-badge">{agent}</span> : null}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+
+          {selectedIDs.size > 0 && (
+            <div className="sidebar__bulkbar">
+              <span className="sidebar__bulkbar-count">{selectedIDs.size} selected</span>
+              {bulkConfirm ? (
+                <>
+                  <span className="sidebar__confirm-text">Delete {selectedIDs.size} session{selectedIDs.size === 1 ? '' : 's'}?</span>
+                  <button
+                    type="button"
+                    className="sidebar__btn sidebar__btn--sm sidebar__btn--danger"
+                    onClick={() => void runBulkDelete()}
+                  >
+                    Delete
+                  </button>
+                  <button
+                    type="button"
+                    className="sidebar__btn sidebar__btn--sm"
+                    onClick={() => setBulkConfirm(false)}
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="sidebar__btn sidebar__btn--sm sidebar__btn--danger"
+                    onClick={() => setBulkConfirm(true)}
+                  >
+                    Delete
+                  </button>
+                  <button
+                    type="button"
+                    className="sidebar__btn sidebar__btn--sm"
+                    onClick={() => setSelectedIDs(new Set())}
+                  >
+                    Clear
+                  </button>
+                </>
+              )}
+            </div>
+          )}
 
           <div className="sidebar__list">
             {ordered.length === 0 && (
@@ -246,6 +428,13 @@ export function Sidebar({ onOpenLiveScreen }: { onOpenLiveScreen?: () => void })
                 </div>
               ) : (
                 <div className="sidebar__row" key={s.id}>
+                  <input
+                    type="checkbox"
+                    className="sidebar__checkbox"
+                    aria-label={`Select session ${s.title || 'Untitled'}`}
+                    checked={selectedIDs.has(s.id)}
+                    onChange={() => toggleSelected(s.id)}
+                  />
                   <button
                     type="button"
                     className={
@@ -279,8 +468,33 @@ export function Sidebar({ onOpenLiveScreen }: { onOpenLiveScreen?: () => void })
                       ) : (
                         <span className="sidebar__session-title">{s.title || 'Untitled'}</span>
                       )}
-                      <span className="sidebar__session-meta">{relativeTime(stamp(s))}</span>
+                      <span className="sidebar__session-meta">
+                        {isPinned(sessionMeta, s.id) ? '📌 ' : ''}
+                        {relativeTime(stamp(s))}
+                      </span>
                     </span>
+                  </button>
+                  <button
+                    type="button"
+                    className={
+                      isPinned(sessionMeta, s.id) ? 'sidebar__pin sidebar__pin--active' : 'sidebar__pin'
+                    }
+                    aria-label={isPinned(sessionMeta, s.id) ? `Unpin session ${s.title || 'Untitled'}` : `Pin session ${s.title || 'Untitled'}`}
+                    title={isPinned(sessionMeta, s.id) ? 'Unpin session' : 'Pin session'}
+                    onClick={() => updateMeta(s.id, { pinned: !isPinned(sessionMeta, s.id) })}
+                  >
+                    {isPinned(sessionMeta, s.id) ? '📌' : '📍'}
+                  </button>
+                  <button
+                    type="button"
+                    className={
+                      isArchived(sessionMeta, s.id) ? 'sidebar__archive sidebar__archive--active' : 'sidebar__archive'
+                    }
+                    aria-label={isArchived(sessionMeta, s.id) ? `Unarchive session ${s.title || 'Untitled'}` : `Archive session ${s.title || 'Untitled'}`}
+                    title={isArchived(sessionMeta, s.id) ? 'Unarchive session' : 'Archive session'}
+                    onClick={() => updateMeta(s.id, { archived: !isArchived(sessionMeta, s.id) })}
+                  >
+                    ⤓
                   </button>
                   <button
                     type="button"

@@ -1,4 +1,5 @@
 import { BrowserWindow } from 'electron'
+import { attachContextMenu } from './contextMenu'
 import { isTrustedRendererUrl } from './trustedUrl'
 import { createBoundsStore } from './windowBounds'
 
@@ -79,6 +80,8 @@ export function setupLiveWindow(options: LiveWindowOptions): LiveWindowControlle
     })
 
     boundsStore.attach(win)
+
+    attachContextMenu(win.webContents)
 
     // 'floating' keeps the window above normal windows without escalating to
     // the screen-saver level, which would fight the OS window switcher.

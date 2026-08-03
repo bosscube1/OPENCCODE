@@ -18,11 +18,48 @@
 
 .chat__header-actions {
   display: flex;
+  align-items: center;
+  gap: 8px;
   justify-content: flex-end;
   padding: 6px 12px;
   background: var(--bg-alt);
   border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
+}
+
+/* Normal / Verbose / Summary segmented control. Pushed left so the export button
+   stays anchored at the right edge, where it was before this control existed. */
+.chat__viewmode {
+  display: flex;
+  margin-right: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.chat__viewmode-btn {
+  font-family: inherit;
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.chat__viewmode-btn:last-child {
+  border-right: 0;
+}
+
+.chat__viewmode-btn:hover {
+  color: var(--fg);
+}
+
+.chat__viewmode-btn--active {
+  background: var(--accent);
+  color: var(--bg);
 }
 
 .chat__export-btn {
@@ -1170,6 +1207,85 @@
   background: var(--bg-inset);
 }
 
+.msg__branch-btn {
+  /* Inherits .msg__edit-btn's tokens; no destructive confirm, so no extra warn colour. */
+}
+
+/* ================================== regenerate split control ========= */
+
+.msg__regen {
+  position: relative;
+  display: inline-flex;
+  margin-top: 6px;
+}
+
+.msg__regen-main {
+  margin-top: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: none;
+}
+
+.msg__regen-chev {
+  margin-top: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  padding: 2px 6px;
+}
+
+.msg__regen-menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  min-width: 220px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  padding: 4px;
+  z-index: 20;
+}
+
+.msg__regen-group + .msg__regen-group {
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 4px;
+}
+
+.msg__regen-group-head {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-dim);
+  padding: 4px 8px 2px;
+}
+
+.msg__regen-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 8px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.msg__regen-item:hover {
+  background: var(--bg-inset);
+}
+
+.msg__regen-empty {
+  font-size: 12px;
+  color: var(--fg-dim);
+  padding: 6px 8px;
+}
+
 /* ================================== todo panel ====================== */
 
 .todo-panel {
@@ -1432,6 +1548,66 @@
   text-align: center;
   color: var(--fg-dim);
   font-size: 12.5px;
+}
+
+.chatsearch__scope {
+  display: inline-flex;
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.chatsearch__scope-btn {
+  padding: 5px 10px;
+  font-size: 11.5px;
+  color: var(--fg-dim);
+  background: var(--bg-inset);
+  border: none;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 90ms ease, color 90ms ease;
+}
+
+.chatsearch__scope-btn:last-child {
+  border-right: none;
+}
+
+.chatsearch__scope-btn:hover {
+  color: var(--fg);
+}
+
+.chatsearch__scope-btn--active {
+  background: var(--accent-soft);
+  color: var(--fg);
+  font-weight: 580;
+}
+
+.chatsearch__cap-note {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--fg-dim);
+  font-style: italic;
+}
+
+.chatsearch__row--other {
+  opacity: 0.75;
+}
+
+.chatsearch__row--other:not(:disabled):hover {
+  opacity: 1;
+}
+
+.chatsearch__row:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.chatsearch__row-project {
+  font-size: 10px;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
 }
 
 /* --------------------------------------------------------------------------

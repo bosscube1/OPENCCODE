@@ -22,4 +22,23 @@ describe('slash command helpers', () => {
     const matches = getMatchingCommands('/test', serverCmds)
     expect(matches.some((c) => c.name === '/test' && c.isServerCommand)).toBe(true)
   })
+
+  it('does not list a server command that collides with a built-in twice', () => {
+    // opencode registers `/init` itself and the local table ships it too. Both used to
+    // reach the menu, which rendered duplicate children under one React key.
+    const serverCmds: ServerCommand[] = [
+      { name: 'init', description: 'Server-side init', template: 'init' }
+    ]
+    const matches = getMatchingCommands('/init', serverCmds)
+    expect(matches.filter((c) => c.name === '/init')).toHaveLength(1)
+  })
+
+  it('keeps the local command on a collision — it is the one with an action', () => {
+    const serverCmds: ServerCommand[] = [
+      { name: 'init', description: 'Server-side init', template: 'init' }
+    ]
+    const [match] = getMatchingCommands('/init', serverCmds).filter((c) => c.name === '/init')
+    expect(match.isServerCommand).toBeUndefined()
+    expect(typeof match.action).toBe('function')
+  })
 })

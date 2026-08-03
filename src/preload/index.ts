@@ -77,6 +77,12 @@ export type UnrevertArgs = {
   sessionID: string
 }
 
+export type ForkArgs = {
+  directory: string
+  sessionID: string
+  messageID: string
+}
+
 /** Project-config permission levels, as validated by `oc:config:permission:set`. */
 export type PermissionLevel = 'ask' | 'allow' | 'deny'
 export type PermissionConfig = {
@@ -87,6 +93,9 @@ export type PermissionConfig = {
   external_directory?: PermissionLevel
 }
 
+/** Scope for `oc:search:chats`: the active project only, or every known project. */
+export type ChatSearchScope = 'project' | 'all'
+
 /** One result row from `oc:search:chats`. Importable by renderer streams. */
 export type ChatSearchHit = {
   sessionID: string
@@ -94,6 +103,8 @@ export type ChatSearchHit = {
   messageID: string
   snippet: string
   time: number
+  /** Absolute directory of the project the hit came from (always set, incl. `scope: 'project'`). */
+  directory: string
 }
 
 /** One masked BYOK key row from `oc:keys:list`. Never carries the full key. Importable by renderer. */
@@ -353,7 +364,8 @@ export interface OpencodeApi {
   pickFiles(): Promise<string[]>
   sessions: {
     list(directory: string): Promise<Session[]>
-    create(directory: string, title?: string): Promise<Session>
+    /** `parentID` creates a child session (subagent tab, `/btw` side chat) instead of a root one. */
+    create(directory: string, title?: string, parentID?: string): Promise<Session>
     remove(directory: string, id: string): Promise<void>
     update(directory: string, id: string, title: string): Promise<Session>
     summarize(a: SummarizeArgs): Promise<boolean>
@@ -443,9 +455,11 @@ export interface OpencodeApi {
   revertMessage(a: RevertArgs): Promise<void>
   /** Restores all reverted messages; resolves to the session with `revert` cleared. */
   unrevertMessage(a: UnrevertArgs): Promise<Session>
+  /** Branches a new session from `messageID`, leaving the source session untouched. */
+  forkSession(a: ForkArgs): Promise<Session>
   /** The server's agent registry for a directory; the picker filters to primary/all modes. */
   agents(directory: string): Promise<Agent[]>
-  searchChats(directory: string, query: string): Promise<ChatSearchHit[]>
+  searchChats(directory: string, query: string, options?: { scope?: ChatSearchScope }): Promise<ChatSearchHit[]>
   prompt(a: PromptArgs): Promise<void>
   abort(directory: string, sessionID: string): Promise<void>
   providers(): Promise<ProvidersResult>
@@ -519,7 +533,8 @@ const api: OpencodeApi = {
   pickFiles: () => ipcRenderer.invoke('oc:pickFiles'),
   sessions: {
     list: (directory) => ipcRenderer.invoke('oc:sessions:list', directory),
-    create: (directory, title) => ipcRenderer.invoke('oc:sessions:create', directory, title),
+    create: (directory, title, parentID) =>
+      ipcRenderer.invoke('oc:sessions:create', directory, title, parentID),
     remove: (directory, id) => ipcRenderer.invoke('oc:sessions:delete', directory, id),
     update: (directory, id, title) => ipcRenderer.invoke('oc:sessions:update', directory, id, title),
     summarize: (a) => ipcRenderer.invoke('oc:sessions:summarize', a),
@@ -597,8 +612,10 @@ const api: OpencodeApi = {
   messages: (directory, sessionID) => ipcRenderer.invoke('oc:messages:list', directory, sessionID),
   revertMessage: (a) => ipcRenderer.invoke('oc:messages:revert', a),
   unrevertMessage: (a) => ipcRenderer.invoke('oc:messages:unrevert', a),
+  forkSession: (a) => ipcRenderer.invoke('oc:session:fork', a),
   agents: (directory) => ipcRenderer.invoke('oc:agents:list', directory),
-  searchChats: (directory, query) => ipcRenderer.invoke('oc:search:chats', directory, query),
+  searchChats: (directory, query, options) =>
+    ipcRenderer.invoke('oc:search:chats', directory, query, options),
   prompt: (a) => ipcRenderer.invoke('oc:prompt', a),
   abort: (directory, sessionID) => ipcRenderer.invoke('oc:abort', directory, sessionID),
   providers: () => ipcRenderer.invoke('oc:providers'),

@@ -90,6 +90,12 @@ export type UnrevertArgs = {
   sessionID: string
 }
 
+export type ForkArgs = {
+  directory: string
+  sessionID: string
+  messageID: string
+}
+
 /** Project-config permission levels, as validated by `oc:config:permission:set`. */
 export type PermissionLevel = 'ask' | 'allow' | 'deny'
 export type PermissionConfig = {
@@ -100,6 +106,9 @@ export type PermissionConfig = {
   external_directory?: PermissionLevel
 }
 
+/** Scope for `oc:search:chats`: the active project only, or every known project. */
+export type ChatSearchScope = 'project' | 'all'
+
 /** One result row from `oc:search:chats`. Importable by renderer streams. */
 export type ChatSearchHit = {
   sessionID: string
@@ -107,6 +116,8 @@ export type ChatSearchHit = {
   messageID: string
   snippet: string
   time: number
+  /** Absolute directory of the project the hit came from (always set, incl. `scope: 'project'`). */
+  directory: string
 }
 
 /** One masked BYOK key row from `oc:keys:list`. Never carries the full key. */
@@ -366,7 +377,8 @@ export interface OpencodeApi {
   pickFiles(): Promise<string[]>
   sessions: {
     list(directory: string): Promise<Session[]>
-    create(directory: string, title?: string): Promise<Session>
+    /** parentID creates a child session (subagent tab, side chat) instead of a root one. */
+    create(directory: string, title?: string, parentID?: string): Promise<Session>
     remove(directory: string, id: string): Promise<void>
     update(directory: string, id: string, title: string): Promise<Session>
     summarize(a: SummarizeArgs): Promise<boolean>
@@ -456,9 +468,11 @@ export interface OpencodeApi {
   revertMessage(a: RevertArgs): Promise<void>
   /** Restores all reverted messages; resolves to the session with `revert` cleared. */
   unrevertMessage(a: UnrevertArgs): Promise<Session>
+  /** Branches a new session from `messageID`, leaving the source session untouched. */
+  forkSession(a: ForkArgs): Promise<Session>
   /** The server's agent registry for a directory; the picker filters to primary/all modes. */
   agents(directory: string): Promise<Agent[]>
-  searchChats(directory: string, query: string): Promise<ChatSearchHit[]>
+  searchChats(directory: string, query: string, options?: { scope?: ChatSearchScope }): Promise<ChatSearchHit[]>
   prompt(a: PromptArgs): Promise<void>
   abort(directory: string, sessionID: string): Promise<void>
   providers(): Promise<ProvidersResult>

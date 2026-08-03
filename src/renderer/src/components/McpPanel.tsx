@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from 'react'
 import type { FormEvent, JSX } from 'react'
 import { useStore } from '../lib/store'
 import { rowsToRecord, splitCommandLine, type KeyValueRow } from '../lib/mcp'
+import { catalogEntryToFormValues, searchCatalog, type CatalogEntry } from '../lib/mcpCatalog'
 import type { McpConfig, McpSnapshot, McpStatus } from '../lib/types'
 import './mcp.css'
 
@@ -88,6 +89,8 @@ export function McpPanel(): JSX.Element {
   const [busyName, setBusyName] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [showAdd, setShowAdd] = useState(false)
+  const [showCatalog, setShowCatalog] = useState(false)
+  const [catalogQuery, setCatalogQuery] = useState('')
   const [kind, setKind] = useState<ConnectorKind>('local')
   const [name, setName] = useState('')
   const [command, setCommand] = useState('')
@@ -189,7 +192,21 @@ export function McpPanel(): JSX.Element {
     }
   }
 
+  function applyCatalogEntry(entry: CatalogEntry): void {
+    const values = catalogEntryToFormValues(entry)
+    setKind(values.kind)
+    setName(values.name)
+    setCommand(values.command)
+    setUrl(values.url)
+    setEnvironment(values.environment)
+    setHeaders(values.headers)
+    setShowCatalog(false)
+    setShowAdd(true)
+  }
+
   const entries = Object.entries(snapshot.configs).sort(([left], [right]) => left.localeCompare(right))
+  const configuredNames = new Set(entries.map(([connectorName]) => connectorName))
+  const catalogResults = searchCatalog(catalogQuery)
 
   if (!directory) {
     return <div className="mcp__empty">Open a workspace to manage its MCP connectors.</div>
@@ -199,6 +216,9 @@ export function McpPanel(): JSX.Element {
     <div className="mcp" aria-busy={loading || busyName !== null}>
       <div className="mcp__intro">
         <p>Connect local tools or remote services to this workspace.</p>
+        <button type="button" className="mcp__button" onClick={() => setShowCatalog((visible) => !visible)} aria-expanded={showCatalog}>
+          {showCatalog ? 'Hide catalog' : 'Browse catalog'}
+        </button>
         <button type="button" className="mcp__button mcp__button--primary" onClick={() => setShowAdd((visible) => !visible)} aria-expanded={showAdd}>
           {showAdd ? 'Cancel' : 'Add connector'}
         </button>
@@ -206,6 +226,58 @@ export function McpPanel(): JSX.Element {
 
       {error && <div className="mcp__message mcp__message--error" role="alert">{error}</div>}
       {loading && <div className="mcp__message" role="status">Loading connectors…</div>}
+
+      {showCatalog && (
+        <div className="mcp__catalog">
+          <label className="mcp__field">
+            <span>Filter catalog</span>
+            <input
+              value={catalogQuery}
+              onChange={(event) => setCatalogQuery(event.target.value)}
+              placeholder="Search by name or description"
+              autoComplete="off"
+            />
+          </label>
+          <div className="mcp__catalog-list">
+            {catalogResults.length === 0 && <div className="mcp__empty">No catalog entries match “{catalogQuery}”.</div>}
+            {catalogResults.map((entry) => {
+              const alreadyAdded = configuredNames.has(entry.name)
+              return (
+                <article className="mcp__catalog-card" key={entry.id}>
+                  <div className="mcp__catalog-card-head">
+                    <div>
+                      <h4>{entry.name}</h4>
+                      <span className="mcp__type">{entry.kind}</span>
+                    </div>
+                    {alreadyAdded && <span className="mcp__status">Already added</span>}
+                  </div>
+                  <p className="mcp__catalog-desc">{entry.description}</p>
+                  {entry.env && entry.env.length > 0 && (
+                    <p className="mcp__catalog-secrets">
+                      Requires: {entry.env.map((row) => `${row.key}${row.secret ? ' (secret)' : ''}`).join(', ')}
+                    </p>
+                  )}
+                  <div className="mcp__actions">
+                    {entry.docsUrl && (
+                      <button
+                        type="button"
+                        className="mcp__button"
+                        onClick={() => void window.api.openExternal(entry.docsUrl!)}
+                        aria-label={`Open documentation for ${entry.name}`}
+                      >
+                        Docs
+                      </button>
+                    )}
+                    <button type="button" className="mcp__button mcp__button--primary" onClick={() => applyCatalogEntry(entry)}>
+                      {alreadyAdded ? 'Re-add…' : 'Use…'}
+                    </button>
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {showAdd && (
         <form className="mcp__form" onSubmit={(event) => void addConnector(event)}>

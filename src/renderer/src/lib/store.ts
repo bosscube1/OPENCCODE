@@ -124,6 +124,7 @@ export const useStore = create<AppState>()((set, get) => {
         routingMode: prefs.routingMode,
         showPaidModels: prefs.showPaidModels,
         compareTargets: prefs.compareTargets,
+        viewMode: prefs.viewMode,
       })
       savePrefs({
         directory: prefs.directory,
@@ -133,6 +134,7 @@ export const useStore = create<AppState>()((set, get) => {
         modelPool: prefs.modelPool,
         routingMode: prefs.routingMode,
         showPaidModels: prefs.showPaidModels,
+        viewMode: prefs.viewMode,
       })
 
       await appSettingsReady

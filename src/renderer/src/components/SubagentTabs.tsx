@@ -1,7 +1,7 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useStore } from '../lib/store'
-import { splitSubagentTitle } from '../lib/subagents'
+import { isSideChatTitle, splitSideChatTitle, splitSubagentTitle } from '../lib/subagents'
 import { MessageView } from './MessageView'
 import './subagent-tabs.css'
 
@@ -33,7 +33,13 @@ export function SubagentTabs(): ReactNode {
       </button>
       {tabs.map((id) => {
         const session = sessions.find((s) => s.id === id)
-        const { label, agent } = splitSubagentTitle(session?.title)
+        // A `/btw` side chat and a Task-tool subagent are both child sessions sharing this
+        // tab strip, but they are not the same thing: one is the user's tangent, the other
+        // is the agent's own delegation. The badge distinguishes them.
+        const sideChat = isSideChatTitle(session?.title)
+        const { label, agent } = sideChat
+          ? { ...splitSideChatTitle(session?.title), agent: null }
+          : splitSubagentTitle(session?.title)
         const isActive = active === id
         const error = errors[id]
         return (
@@ -50,6 +56,7 @@ export function SubagentTabs(): ReactNode {
               <span className="subagent-tabs__spinner" role="status" aria-label="Working" />
             ) : null}
             <span className="subagent-tabs__label">{label}</span>
+            {sideChat ? <span className="subagent-tabs__badge">btw</span> : null}
             {agent !== null ? <span className="subagent-tabs__badge">{agent}</span> : null}
             {error !== undefined && error !== null ? (
               <span className="subagent-tabs__errordot" title={error} aria-label="Error" />
@@ -73,9 +80,9 @@ export function SubagentTabs(): ReactNode {
 }
 
 /**
- * Read-only transcript of one subagent session, swapped in for the main message list.
- * The composer stays bound to the parent session, so the bottom bar here is a notice
- * with a stop control instead of an input.
+ * Transcript of one subagent session, swapped in for the main message list. The bottom bar
+ * is a small composer that prompts the CHILD session (via `promptSubagent`) — the main
+ * composer below still belongs to the parent. Stop and Back-to-main sit beside the input.
  */
 export function SubagentView({ sessionID }: { sessionID: string }): ReactNode {
   const messages = useStore((state) => state.subagentMessages[sessionID])
@@ -83,9 +90,11 @@ export function SubagentView({ sessionID }: { sessionID: string }): ReactNode {
   const error = useStore((state) => state.subagentError[sessionID])
   const sessions = useStore((state) => state.sessions)
   const stopSubagent = useStore((state) => state.stopSubagent)
+  const promptSubagent = useStore((state) => state.promptSubagent)
   const setActiveSubagentTab = useStore((state) => state.setActiveSubagentTab)
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const [draft, setDraft] = useState('')
 
   // Follow the stream: new content lands at the bottom, like the main transcript.
   useEffect(() => {
@@ -96,6 +105,13 @@ export function SubagentView({ sessionID }: { sessionID: string }): ReactNode {
   const session = sessions.find((s) => s.id === sessionID)
   const { label } = splitSubagentTitle(session?.title)
   const transcript = messages ?? []
+
+  const send = (): void => {
+    const text = draft.trim()
+    if (text.length === 0 || busy === true) return
+    setDraft('')
+    void promptSubagent(sessionID, text)
+  }
 
   return (
     <div className="subagent-view">
@@ -120,9 +136,26 @@ export function SubagentView({ sessionID }: { sessionID: string }): ReactNode {
         </div>
       </div>
       <div className="subagent-view__notice">
-        <span className="subagent-view__noticetext">
-          Viewing subagent <strong>{label}</strong> — read-only. Prompts go to the main session.
-        </span>
+        <input
+          type="text"
+          className="subagent-view__input"
+          placeholder={`Message ${label}…`}
+          aria-label={`Message subagent ${label}`}
+          value={draft}
+          disabled={busy === true}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') send()
+          }}
+        />
+        <button
+          type="button"
+          className="subagent-view__btn subagent-view__btn--send"
+          disabled={busy === true || draft.trim().length === 0}
+          onClick={send}
+        >
+          Send
+        </button>
         {busy === true ? (
           <button
             type="button"

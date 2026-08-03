@@ -35,7 +35,9 @@ win:
       arch:
         - x64
   executableName: opencode-desktop
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  # No spaces: GitHub rewrites spaces in uploaded asset names, and electron-updater
+  # resolves the hyphenated name electron-builder writes into latest.yml.
+  artifactName: OpenCode-Desktop-${version}-${arch}.${ext}
 
 nsis:
   oneClick: false
@@ -45,10 +47,10 @@ nsis:
   createStartMenuShortcut: true
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
-  artifactName: ${productName}-${version}-setup.${ext}
+  artifactName: OpenCode-Desktop-${version}-setup.${ext}
 
 portable:
-  artifactName: ${productName}-${version}-portable.${ext}
+  artifactName: OpenCode-Desktop-${version}-portable.${ext}
 
 publish:
   provider: github

@@ -9,6 +9,13 @@ import { SubagentTabs, SubagentView } from './SubagentTabs'
 import { TodoPanel } from './TodoPanel'
 import { ChatSearch, SCROLL_TO_MESSAGE_EVENT } from './ChatSearch'
 import { exportMarkdown } from '../lib/exportMarkdown'
+import {
+  VIEW_MODES,
+  describeViewMode,
+  shouldCollapseTools,
+  shouldHideTools,
+  viewModeLabel
+} from '../lib/viewMode'
 import './messages.css'
 
 /** Dispatched by Sidebar.tsx to open the global chat-search modal. */
@@ -71,6 +78,8 @@ export function Chat(): ReactNode {
     return state.sessions.find((s) => s.id === id)?.revert
   })
   const unrevertSession = useStore((state) => state.unrevertSession)
+  const viewMode = useStore((state) => state.viewMode)
+  const setViewMode = useStore((state) => state.setViewMode)
   // True when a subagent tab is being viewed instead of the main transcript.
   const viewingSubagent = activeSubagentTab !== null
 
@@ -251,11 +260,36 @@ export function Chat(): ReactNode {
   )
 
   const showEmptySession = activeSessionID !== null && messages.length === 0
+  const hideTools = shouldHideTools(viewMode)
 
   return (
     <section className="chat">
       {messages.length > 0 && (
         <div className="chat__header-actions">
+          <div
+            className="chat__viewmode"
+            role="radiogroup"
+            aria-label="Transcript detail"
+            title={describeViewMode(viewMode)}
+          >
+            {VIEW_MODES.map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                role="radio"
+                aria-checked={viewMode === mode}
+                className={
+                  viewMode === mode
+                    ? 'chat__viewmode-btn chat__viewmode-btn--active'
+                    : 'chat__viewmode-btn'
+                }
+                title={describeViewMode(mode)}
+                onClick={() => setViewMode(mode)}
+              >
+                {viewModeLabel(mode)}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             className="chat__export-btn"
@@ -378,7 +412,12 @@ export function Chat(): ReactNode {
                   >
                     <MessageView
                       message={message}
-                      collapseTools={visibleMessages.length - index > TOOLS_EXPANDED_TAIL}
+                      collapseTools={shouldCollapseTools(
+                        viewMode,
+                        visibleMessages.length - index,
+                        TOOLS_EXPANDED_TAIL
+                      )}
+                      hideTools={hideTools}
                     />
                   </div>
                 ))}

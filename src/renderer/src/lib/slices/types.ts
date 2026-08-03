@@ -7,6 +7,7 @@
  */
 
 import type { Theme, RoutingMode } from '../prefs'
+import type { ViewMode } from '../viewMode'
 import type { CompareRun } from '../compare'
 import type {
   AppSettings,
@@ -116,8 +117,12 @@ export interface AppState {
   closeSubagentTab(sessionID: string): void
   /** Switch the viewed tab. Null = main transcript; unknown ids are ignored. */
   setActiveSubagentTab(sessionID: string | null): void
-  /** Abort a running child session (read-only tabs never prompt into it). */
+  /** Abort a running child session. */
   stopSubagent(sessionID: string): Promise<void>
+  /** Send a follow-up prompt into an open tab's child session (uses the parent's model pick). */
+  promptSubagent(sessionID: string, text: string): Promise<void>
+  /** `/btw` — open a child session for a tangent question, leaving the main transcript alone. */
+  startSideChat(question: string): Promise<void>
   /** Reset everything — runs on session switch and directory change. */
   clearSubagents(): void
 
@@ -168,10 +173,13 @@ export interface AppState {
   setTheme(t: Theme): void
   queuePrompt(text: string, parts?: PromptPart[]): void
   removeQueued(index: number): void
-  retryExchange(messageID: string): Promise<void>
+  /** `override` is a one-shot providerID/modelID for this resend only; omit to reuse the current store selection. */
+  retryExchange(messageID: string, override?: { providerID: string; modelID: string }): Promise<void>
   editAndResend(messageID: string, newText: string): Promise<void>
   /** Restore a reverted session (unrevert), then reload its transcript. */
   unrevertSession(): Promise<void>
+  /** Branch a new, non-destructive session from `messageID` (server-side fork), then switch to it. */
+  branchFromMessage(messageID: string): Promise<void>
   setActiveArtifactID(id: string | null): void
 
   /* ---- Phase 1 code surface: fs / editor / git / terminal / panel UI ---- */
@@ -251,6 +259,9 @@ export interface AppState {
   setPanelTab(tab: AppState['panelTab']): void
   paletteOpen: boolean
   setPaletteOpen(open: boolean): void
+  /** Transcript density: Normal / Verbose / Summary. Persisted in prefs. */
+  viewMode: ViewMode
+  setViewMode(mode: ViewMode): void
 }
 
 /**

@@ -9,6 +9,7 @@ import type { Agent, Message, Part, Provider, Session } from '@opencode-ai/sdk'
 import { getAuthorizedProviderIDs, getClient, getStatus, isAuthorizedProvider, restartServer, setEventDirectory, type ServerStatus } from './server'
 import { getPermissionConfig, setPermissionConfig, validatePermissionConfig, type PermissionConfig } from './configService'
 import { optionalAgentName, optionalToolPolicy } from './promptValidation'
+import { parseSearchOptions, resolveSearchDirectories } from './searchScope'
 import { register as registerFs } from './fsService'
 import { register as registerGit } from './gitService'
 import { register as registerTerminal } from './terminal'
@@ -134,6 +135,7 @@ const CHANNELS = [
   'oc:saveFile',
   'oc:messages:revert',
   'oc:messages:unrevert',
+  'oc:session:fork',
   'oc:agents:list',
   'oc:config:permission:get',
   'oc:config:permission:set',
@@ -237,6 +239,7 @@ export type ChatSearchHit = {
   messageID: string
   snippet: string
   time: number
+  directory: string
 }
 
 /* ------------------------------------------------------------------ */
@@ -479,13 +482,20 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
 
   ipcMain.handle(
     'oc:sessions:create',
-    async (_event, directoryArg: unknown, titleArg: unknown): Promise<Session> => {
+    async (
+      _event,
+      directoryArg: unknown,
+      titleArg: unknown,
+      parentIDArg: unknown
+    ): Promise<Session> => {
       const directory = requireString(directoryArg, 'directory')
       const title = optionalString(titleArg)
+      // Child sessions (subagent tabs, side chats) pass parentID; omitted for a root session.
+      const parentID = optionalString(parentIDArg)
       return call<Session>(
         getClient().session.create({
           query: { directory },
-          body: title ? { title } : {}
+          body: { ...(title ? { title } : {}), ...(parentID ? { parentID } : {}) }
         })
       )
     }
@@ -898,6 +908,21 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
     )
   })
 
+  ipcMain.handle('oc:session:fork', async (_event, argsArg: unknown): Promise<Session> => {
+    const args = requireObject(argsArg, 'fork args')
+    const directory = requireString(args.directory, 'directory')
+    const sessionID = requireString(args.sessionID, 'sessionID')
+    const messageID = requireString(args.messageID, 'messageID')
+    // The server creates the branched session and returns it — no revert/replay needed.
+    return call<Session>(
+      getClient().session.fork({
+        path: { id: sessionID },
+        query: { directory },
+        body: { messageID }
+      })
+    )
+  })
+
   ipcMain.handle('oc:agents:list', async (_event, directoryArg: unknown): Promise<Agent[]> => {
     const directory = requireString(directoryArg, 'directory')
     return call<Agent[]>(getClient().app.agents({ query: { directory } }))
@@ -919,17 +944,24 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
     return setPermissionConfig(getClient(), directory, permission, restartServer)
   })
 
-  ipcMain.handle(
-    'oc:search:chats',
-    async (_event, directoryArg: unknown, queryArg: unknown): Promise<ChatSearchHit[]> => {
-      const directory = requireString(directoryArg, 'directory')
-      const query = typeof queryArg === 'string' ? queryArg : ''
-      const needle = query.trim().toLowerCase()
-      if (needle.length === 0) return []
+  /**
+   * Search a single directory's sessions. A directory may belong to a project whose
+   * folder was deleted or renamed, or that the currently-running server simply doesn't
+   * know about — that must never fail the whole (possibly multi-directory) search, so
+   * `session.list` itself is wrapped here in addition to the existing per-session guard.
+   */
+  const searchOneDirectory = async (directory: string, needle: string): Promise<ChatSearchHit[]> => {
+    let sessions: Session[]
+    try {
+      sessions = await call<Session[]>(getClient().session.list({ query: { directory } }))
+    } catch {
+      // One directory failing to load (deleted/renamed/unknown to the server) must
+      // never fail the whole search.
+      return []
+    }
 
-      const sessions = await call<Session[]>(getClient().session.list({ query: { directory } }))
-
-      const perSession = await promisePool(sessions, 4, async (session): Promise<ChatSearchHit[]> => {
+    return (
+      await promisePool(sessions, 4, async (session): Promise<ChatSearchHit[]> => {
         const updated = session.time?.updated ?? 0
         const cacheKey = `${session.id}:${updated}`
 
@@ -963,14 +995,42 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
               title,
               messageID: entry.messageID,
               snippet: makeSnippet(entry.text, matchIndex, needle.length),
-              time: updated
+              time: updated,
+              directory
             })
           }
         }
         return out
       })
+    ).flat()
+  }
 
-      return perSession
+  ipcMain.handle(
+    'oc:search:chats',
+    async (
+      _event,
+      directoryArg: unknown,
+      queryArg: unknown,
+      optionsArg: unknown
+    ): Promise<ChatSearchHit[]> => {
+      const directory = requireString(directoryArg, 'directory')
+      const query = typeof queryArg === 'string' ? queryArg : ''
+      const needle = query.trim().toLowerCase()
+      if (needle.length === 0) return []
+
+      const options = parseSearchOptions(optionsArg)
+      const directories =
+        options.scope === 'all'
+          ? resolveSearchDirectories(directory, 'all', (await listProjects()).map((p) => p.directory))
+          : [directory]
+
+      // Bound total fan-out: directories are themselves run through the bounded-pool
+      // helper at concurrency 2 (on top of the existing per-session concurrency of 4),
+      // so worst-case in-flight message fetches stays at 2 * 4 = 8 rather than scaling
+      // linearly with the number of known projects.
+      const perDirectory = await promisePool(directories, 2, (dir) => searchOneDirectory(dir, needle))
+
+      return perDirectory
         .flat()
         .sort((a, b) => b.time - a.time)
         .slice(0, 100)
