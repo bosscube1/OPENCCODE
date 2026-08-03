@@ -38,6 +38,7 @@ export type SubagentSlice = Pick<
   | 'closeSubagentTab'
   | 'setActiveSubagentTab'
   | 'stopSubagent'
+  | 'promptSubagent'
   | 'startSideChat'
   | 'clearSubagents'
 >
@@ -135,6 +136,37 @@ export function createSubagentSlice(set: SetState, get: GetState): SubagentSlice
         // The resulting session.idle / session.error event clears the busy flag.
       } catch (e) {
         set((state) => ({
+          subagentError: { ...state.subagentError, [sessionID]: errText(e) }
+        }))
+      }
+    },
+
+    /**
+     * Send a follow-up prompt to a child session from its tab. Uses the parent's currently
+     * selected provider/model — the same choice `startSideChat` makes — because a child
+     * session carries no model selection of its own in this UI. Refuses to double-prompt a
+     * busy child; the follow-up can be queued by stopping the subagent first.
+     *
+     * Like `startSideChat`, this deliberately stays clear of the main session's attempt
+     * machine, busy flag, and routing ledger: the child's `session.status` / `session.idle`
+     * events own `subagentBusy` from here.
+     */
+    async promptSubagent(sessionID: string, text: string): Promise<void> {
+      const { directory, providerID, modelID } = get()
+      const trimmed = text.trim()
+      if (!directory || !sessionID || trimmed.length === 0 || !providerID || !modelID) return
+      if (!get().subagentTabs.includes(sessionID)) return
+      if (get().subagentBusy[sessionID] === true) return
+
+      set((state) => ({
+        subagentBusy: { ...state.subagentBusy, [sessionID]: true },
+        subagentError: { ...state.subagentError, [sessionID]: null }
+      }))
+      try {
+        await api().prompt({ directory, sessionID, providerID, modelID, text: trimmed })
+      } catch (e) {
+        set((state) => ({
+          subagentBusy: { ...state.subagentBusy, [sessionID]: false },
           subagentError: { ...state.subagentError, [sessionID]: errText(e) }
         }))
       }

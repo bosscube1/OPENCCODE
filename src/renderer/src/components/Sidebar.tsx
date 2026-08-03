@@ -4,6 +4,7 @@ import type { Session } from '@opencode-ai/sdk'
 import { useStore } from '../lib/store'
 import { relativeTime, shortPath } from '../lib/format'
 import { isCompareSessionTitle } from '../lib/compare'
+import { childSessionsOf, isSideChatTitle, splitSideChatTitle, splitSubagentTitle } from '../lib/subagents'
 import {
   loadSessionMeta,
   saveSessionMeta,
@@ -45,6 +46,8 @@ export function Sidebar({ onOpenLiveScreen }: { onOpenLiveScreen?: () => void })
   const renameSession = useStore((s) => s.renameSession)
   const activeView = useStore((s) => s.activeView)
   const setActiveView = useStore((s) => s.setActiveView)
+  const subagentBusy = useStore((s) => s.subagentBusy)
+  const openSubagentTab = useStore((s) => s.openSubagentTab)
 
   const [providersOpen, setProvidersOpen] = useState(false)
   const [confirmID, setConfirmID] = useState<string | null>(null)
@@ -110,6 +113,15 @@ export function Sidebar({ onOpenLiveScreen }: { onOpenLiveScreen?: () => void })
   const compareCount = useMemo(
     () => sessions.filter((s) => !s.parentID && isCompareSessionTitle(s.title)).length,
     [sessions]
+  )
+
+  // The active session's child sessions (Task-tool subagents and `/btw` side chats). These
+  // are hidden from the Recents list by the `!s.parentID` filter, so without this section
+  // there is no way back into a subagent tab once it has been closed or cleared by a
+  // session switch — short of scrolling the transcript for the Task tool call.
+  const subagentChildren = useMemo(
+    () => childSessionsOf(sessions, activeSessionID),
+    [sessions, activeSessionID]
   )
 
   // Bulk operations must never sweep up compare-run sessions or subagent/side-chat sessions —
@@ -308,6 +320,40 @@ export function Sidebar({ onOpenLiveScreen }: { onOpenLiveScreen?: () => void })
               </label>
             )}
           </div>
+
+          {subagentChildren.length > 0 && (
+            <div className="sidebar__subagents">
+              <div className="sidebar__listhead">
+                <span className="sidebar__label">Subagents</span>
+                <span className="sidebar__count">{subagentChildren.length}</span>
+              </div>
+              {subagentChildren.map((child) => {
+                const sideChat = isSideChatTitle(child.title)
+                const { label, agent } = sideChat
+                  ? { ...splitSideChatTitle(child.title), agent: null }
+                  : splitSubagentTitle(child.title)
+                return (
+                  <button
+                    key={child.id}
+                    type="button"
+                    className="sidebar__subagent"
+                    title={`${child.title}\nOpen in a chat tab`}
+                    onClick={() => {
+                      setActiveView('chats')
+                      void openSubagentTab(child.id)
+                    }}
+                  >
+                    {subagentBusy[child.id] === true ? (
+                      <span className="sidebar__subagent-spinner" role="status" aria-label="Working" />
+                    ) : null}
+                    <span className="sidebar__subagent-label">{label}</span>
+                    {sideChat ? <span className="sidebar__subagent-badge">btw</span> : null}
+                    {agent !== null ? <span className="sidebar__subagent-badge">{agent}</span> : null}
+                  </button>
+                )
+              })}
+            </div>
+          )}
 
           {selectedIDs.size > 0 && (
             <div className="sidebar__bulkbar">

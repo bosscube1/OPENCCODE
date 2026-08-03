@@ -61,6 +61,22 @@ export function taskChildSessionId(part: ToolPart): string | undefined {
   return typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : undefined
 }
 
+/**
+ * Direct child sessions of `parentID`, oldest-first. These are what the sidebar's subagent
+ * section lists: Task-tool subagents and `/btw` side chats share the same `parentID` link,
+ * and the tab strip renders both. Strictly direct children — a nested subagent belongs to
+ * its own parent's section, not the root's.
+ */
+export function childSessionsOf(
+  sessions: readonly Session[],
+  parentID: string | null | undefined
+): Session[] {
+  if (!parentID) return []
+  return sessions
+    .filter((s) => s.parentID === parentID)
+    .sort((a, b) => (a.time?.created ?? 0) - (b.time?.created ?? 0))
+}
+
 /** Matches the trailing ` (@<agent> subagent)` the server appends to child session titles. */
 const SUBAGENT_TITLE_SUFFIX = /\s*\(@([^()]+?)\s+subagent\)\s*$/
 

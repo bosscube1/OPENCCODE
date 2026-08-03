@@ -117,8 +117,10 @@ export interface AppState {
   closeSubagentTab(sessionID: string): void
   /** Switch the viewed tab. Null = main transcript; unknown ids are ignored. */
   setActiveSubagentTab(sessionID: string | null): void
-  /** Abort a running child session (read-only tabs never prompt into it). */
+  /** Abort a running child session. */
   stopSubagent(sessionID: string): Promise<void>
+  /** Send a follow-up prompt into an open tab's child session (uses the parent's model pick). */
+  promptSubagent(sessionID: string, text: string): Promise<void>
   /** `/btw` — open a child session for a tangent question, leaving the main transcript alone. */
   startSideChat(question: string): Promise<void>
   /** Reset everything — runs on session switch and directory change. */
