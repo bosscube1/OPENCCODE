@@ -12,7 +12,7 @@ vi.mock('electron', () => ({
   app: { getPath: () => state.userDataPath }
 }))
 
-import { deleteImage, listImages, readImage, readIndex, reconcile, saveImage } from '../nanogptImages'
+import { deleteImage, imagesToday, listImages, readImage, readIndex, reconcile, saveImage } from '../nanogptImages'
 
 /** A real, decodable 1x1 transparent PNG. */
 const TINY_PNG_BASE64 =
@@ -36,18 +36,18 @@ describe('nanogptImages', () => {
   })
 
   describe('readIndex', () => {
-    it('returns an empty index when no file exists', () => {
-      expect(readIndex()).toEqual({ version: 1, images: [] })
+    it('returns an empty index when no file exists', async () => {
+      expect(await readIndex()).toEqual({ version: 1, images: [] })
     })
 
-    it('returns an empty index and does not throw when the file is corrupt', () => {
+    it('returns an empty index and does not throw when the file is corrupt', async () => {
       mkdirSync(imagesDirPath(), { recursive: true })
       writeFileSync(indexPath(), '{ not json', 'utf8')
-      expect(() => readIndex()).not.toThrow()
-      expect(readIndex()).toEqual({ version: 1, images: [] })
+      await expect(readIndex()).resolves.not.toThrow()
+      expect(await readIndex()).toEqual({ version: 1, images: [] })
     })
 
-    it('drops malformed entries: missing id, non-string prompt, non-string model', () => {
+    it('drops malformed entries: missing id, non-string prompt, non-string model', async () => {
       mkdirSync(imagesDirPath(), { recursive: true })
       const raw = {
         version: 1,
@@ -59,16 +59,16 @@ describe('nanogptImages', () => {
         ]
       }
       writeFileSync(indexPath(), JSON.stringify(raw), 'utf8')
-      const index = readIndex()
+      const index = await readIndex()
       expect(index.images).toHaveLength(1)
       expect(index.images[0]?.id).toBe('ok')
     })
   })
 
   describe('saveImage', () => {
-    it('writes a real PNG file and returns metadata with correct bytes and createdAt', () => {
+    it('writes a real PNG file and returns metadata with correct bytes and createdAt', async () => {
       const decoded = Buffer.from(TINY_PNG_BASE64, 'base64')
-      const meta = saveImage({
+      const meta = await saveImage({
         base64: TINY_PNG_BASE64,
         sessionID: 's1',
         prompt: 'a cat',
@@ -82,22 +82,22 @@ describe('nanogptImages', () => {
       expect(existsSync(pngPath)).toBe(true)
     })
 
-    it('throws when given an empty base64 string', () => {
-      expect(() =>
+    it('throws when given an empty base64 string', async () => {
+      await expect(
         saveImage({ base64: '', sessionID: null, prompt: 'p', model: 'm' })
-      ).toThrow()
+      ).rejects.toThrow()
     })
   })
 
   describe('listImages', () => {
-    it('returns newest first', () => {
-      const first = saveImage({
+    it('returns newest first', async () => {
+      const first = await saveImage({
         base64: TINY_PNG_BASE64,
         sessionID: 's1',
         prompt: 'first',
         model: 'm'
       })
-      const second = saveImage({
+      const second = await saveImage({
         base64: TINY_PNG_BASE64,
         sessionID: 's1',
         prompt: 'second',
@@ -105,7 +105,7 @@ describe('nanogptImages', () => {
       })
       // saveImage stamps createdAt via Date.now(); force a deterministic order regardless of
       // clock resolution by rewriting the index with explicit timestamps.
-      const index = readIndex()
+      const index = await readIndex()
       const rewritten = {
         version: 1 as const,
         images: index.images.map((meta) =>
@@ -118,31 +118,31 @@ describe('nanogptImages', () => {
       }
       writeFileSync(indexPath(), `${JSON.stringify(rewritten, null, 2)}\n`, 'utf8')
 
-      const listed = listImages()
+      const listed = await listImages()
       expect(listed.map((m) => m.id)).toEqual([second.id, first.id])
     })
 
-    it('scopes to a session and excludes entries saved with sessionID: null', () => {
-      const scoped = saveImage({
+    it('scopes to a session and excludes entries saved with sessionID: null', async () => {
+      const scoped = await saveImage({
         base64: TINY_PNG_BASE64,
         sessionID: 's1',
         prompt: 'p',
         model: 'm'
       })
-      const otherSession = saveImage({
+      const otherSession = await saveImage({
         base64: TINY_PNG_BASE64,
         sessionID: 's2',
         prompt: 'p',
         model: 'm'
       })
-      const noSession = saveImage({
+      const noSession = await saveImage({
         base64: TINY_PNG_BASE64,
         sessionID: null,
         prompt: 'p',
         model: 'm'
       })
 
-      const listed = listImages('s1')
+      const listed = await listImages('s1')
       const ids = listed.map((m) => m.id)
       expect(ids).toContain(scoped.id)
       expect(ids).not.toContain(otherSession.id)
@@ -151,18 +151,18 @@ describe('nanogptImages', () => {
   })
 
   describe('readImage', () => {
-    it('round-trips the exact base64 that was saved', () => {
-      const meta = saveImage({
+    it('round-trips the exact base64 that was saved', async () => {
+      const meta = await saveImage({
         base64: TINY_PNG_BASE64,
         sessionID: null,
         prompt: 'p',
         model: 'm'
       })
-      expect(readImage(meta.id)).toBe(TINY_PNG_BASE64)
+      expect(await readImage(meta.id)).toBe(TINY_PNG_BASE64)
     })
 
-    it('returns null for an unknown but well-formed id', () => {
-      expect(readImage(randomUUID())).toBeNull()
+    it('returns null for an unknown but well-formed id', async () => {
+      expect(await readImage(randomUUID())).toBeNull()
     })
   })
 
@@ -186,25 +186,25 @@ describe('nanogptImages', () => {
       }
     })
 
-    it('readImage rejects traversal ids, returning null instead of the outside file', () => {
-      expect(readImage('../../etc/passwd')).toBeNull()
-      expect(readImage(`../../${sentinelName}`)).toBeNull()
+    it('readImage rejects traversal ids, returning null instead of the outside file', async () => {
+      expect(await readImage('../../etc/passwd')).toBeNull()
+      expect(await readImage(`../../${sentinelName}`)).toBeNull()
     })
 
-    it('readImage rejects other malformed ids: a/b, .., empty string, valid-id+.png suffix', () => {
-      expect(readImage('a/b')).toBeNull()
-      expect(readImage('..')).toBeNull()
-      expect(readImage('')).toBeNull()
-      expect(readImage(`${randomUUID()}.png`)).toBeNull()
+    it('readImage rejects other malformed ids: a/b, .., empty string, valid-id+.png suffix', async () => {
+      expect(await readImage('a/b')).toBeNull()
+      expect(await readImage('..')).toBeNull()
+      expect(await readImage('')).toBeNull()
+      expect(await readImage(`${randomUUID()}.png`)).toBeNull()
     })
 
-    it('deleteImage throws on traversal ids rather than deleting anything', () => {
-      expect(() => deleteImage('../../foo')).toThrow()
-      expect(() => deleteImage(`../../${sentinelName}`)).toThrow()
-      expect(() => deleteImage('a/b')).toThrow()
-      expect(() => deleteImage('..')).toThrow()
-      expect(() => deleteImage('')).toThrow()
-      expect(() => deleteImage(`${randomUUID()}.png`)).toThrow()
+    it('deleteImage throws on traversal ids rather than deleting anything', async () => {
+      await expect(deleteImage('../../foo')).rejects.toThrow()
+      await expect(deleteImage(`../../${sentinelName}`)).rejects.toThrow()
+      await expect(deleteImage('a/b')).rejects.toThrow()
+      await expect(deleteImage('..')).rejects.toThrow()
+      await expect(deleteImage('')).rejects.toThrow()
+      await expect(deleteImage(`${randomUUID()}.png`)).rejects.toThrow()
 
       // Confirm the file outside the images dir survived every attempt above.
       expect(existsSync(outsideFile)).toBe(true)
@@ -212,8 +212,8 @@ describe('nanogptImages', () => {
   })
 
   describe('deleteImage', () => {
-    it('removes both the file and the index entry', () => {
-      const meta = saveImage({
+    it('removes both the file and the index entry', async () => {
+      const meta = await saveImage({
         base64: TINY_PNG_BASE64,
         sessionID: null,
         prompt: 'p',
@@ -222,20 +222,20 @@ describe('nanogptImages', () => {
       const pngPath = join(imagesDirPath(), `${meta.id}.png`)
       expect(existsSync(pngPath)).toBe(true)
 
-      deleteImage(meta.id)
+      await deleteImage(meta.id)
 
       expect(existsSync(pngPath)).toBe(false)
-      expect(readIndex().images.find((m) => m.id === meta.id)).toBeUndefined()
+      expect((await readIndex()).images.find((m) => m.id === meta.id)).toBeUndefined()
     })
 
-    it('does not throw when called for an unknown but valid id', () => {
-      expect(() => deleteImage(randomUUID())).not.toThrow()
+    it('does not throw when called for an unknown but valid id', async () => {
+      await expect(deleteImage(randomUUID())).resolves.not.toThrow()
     })
   })
 
   describe('reconcile', () => {
-    it('drops an index entry whose PNG was deleted out from under it', () => {
-      const meta = saveImage({
+    it('drops an index entry whose PNG was deleted out from under it', async () => {
+      const meta = await saveImage({
         base64: TINY_PNG_BASE64,
         sessionID: null,
         prompt: 'p',
@@ -244,20 +244,20 @@ describe('nanogptImages', () => {
       const pngPath = join(imagesDirPath(), `${meta.id}.png`)
       unlinkSync(pngPath)
 
-      const result = reconcile()
+      const result = await reconcile({ force: true })
 
       expect(result.removedEntries).toBe(1)
-      expect(readIndex().images.find((m) => m.id === meta.id)).toBeUndefined()
+      expect((await readIndex()).images.find((m) => m.id === meta.id)).toBeUndefined()
     })
 
-    it('deletes an orphan PNG with no index entry, and never deletes index.json', () => {
+    it('deletes an orphan PNG with no index entry, and never deletes index.json', async () => {
       mkdirSync(imagesDirPath(), { recursive: true })
       const orphanId = randomUUID()
       writeFileSync(join(imagesDirPath(), `${orphanId}.png`), Buffer.from([1, 2, 3]))
       // Ensure index.json exists so we can assert it survives.
       writeFileSync(indexPath(), `${JSON.stringify({ version: 1, images: [] }, null, 2)}\n`, 'utf8')
 
-      const result = reconcile()
+      const result = await reconcile({ force: true })
 
       expect(result.removedFiles).toBe(1)
       expect(existsSync(join(imagesDirPath(), `${orphanId}.png`))).toBe(false)
@@ -266,7 +266,7 @@ describe('nanogptImages', () => {
   })
 
   describe('retention (MAX_RETAINED cap)', () => {
-    it('prunes the single oldest entry when a save pushes the count past 500', () => {
+    it('prunes the single oldest entry when a save pushes the count past 500', async () => {
       // Exercising the real 501-image path via 501 saveImage() calls would be slow and slightly
       // indirect (Date.now() resolution could tie createdAt across fast writes). Instead we seed
       // the index directly with 500 synthetic, strictly-ordered entries plus their on-disk PNGs —
@@ -289,19 +289,60 @@ describe('nanogptImages', () => {
       writeFileSync(indexPath(), `${JSON.stringify({ version: 1, images: synthetic }, null, 2)}\n`, 'utf8')
 
       const oldest = synthetic[0]!
-      const newest = saveImage({
+      const newest = await saveImage({
         base64: TINY_PNG_BASE64,
         sessionID: null,
         prompt: 'newest',
         model: 'm'
       })
 
-      const index = readIndex()
+      const index = await readIndex()
       expect(index.images).toHaveLength(500)
       expect(index.images.find((m) => m.id === oldest.id)).toBeUndefined()
       expect(index.images.find((m) => m.id === newest.id)).toBeDefined()
       expect(existsSync(join(imagesDirPath(), `${oldest.id}.png`))).toBe(false)
       expect(existsSync(join(imagesDirPath(), `${newest.id}.png`))).toBe(true)
+    })
+  })
+
+  describe('concurrent saveImage (index write lock, D1)', () => {
+    it('5 concurrent saveImage calls all land in the index (no lost updates)', async () => {
+      const results = await Promise.all(
+        Array.from({ length: 5 }, (_, i) =>
+          saveImage({
+            base64: TINY_PNG_BASE64,
+            sessionID: 's1',
+            prompt: `concurrent ${i}`,
+            model: 'm'
+          })
+        )
+      )
+
+      const index = await readIndex()
+      expect(index.images).toHaveLength(5)
+      const indexedIds = new Set(index.images.map((m) => m.id))
+      for (const result of results) {
+        expect(indexedIds.has(result.id)).toBe(true)
+      }
+    })
+  })
+
+  describe('imagesToday', () => {
+    it('counts images generated since UTC midnight', async () => {
+      // Save an image (it gets Date.now() as createdAt, which is today)
+      await saveImage({
+        base64: TINY_PNG_BASE64,
+        sessionID: null,
+        prompt: 'p',
+        model: 'm'
+      })
+      const count = await imagesToday()
+      expect(count).toBe(1)
+    })
+
+    it('returns 0 when no images exist', async () => {
+      const count = await imagesToday()
+      expect(count).toBe(0)
     })
   })
 })

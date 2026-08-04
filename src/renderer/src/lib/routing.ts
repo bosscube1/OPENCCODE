@@ -81,6 +81,7 @@ export type ProviderCaps = {
    */
   tpm?: number
   rpdWindow?: RpdWindow
+  burst?: { count: number; windowMs: number }
 }
 
 /**
@@ -360,9 +361,20 @@ export function recordTimeout(ledger: Ledger, key: ModelKey, now: number): Ledge
 /**
  * Check if a model is under conservative rate caps (RPM / RPD).
  */
-export function underRateCaps(ledger: Ledger, key: ModelKey, caps: ModelCapsMap, now: number): boolean {
+export function underRateCaps(
+  ledger: Ledger,
+  key: ModelKey,
+  caps: ModelCapsMap,
+  now: number,
+  opts?: { nanoQuotaExhausted?: boolean }
+): boolean {
   const parsed = parseModelKey(key)
   if (!parsed) return false
+
+  if (parsed.providerID === 'nanogpt' && opts?.nanoQuotaExhausted === true) {
+    return false
+  }
+
   const resolved = capsFor(caps, key)
   if (!resolved) return true
 
@@ -381,6 +393,11 @@ export function underRateCaps(ledger: Ledger, key: ModelKey, caps: ModelCapsMap,
   if (enforceRpm) {
     const rpmSends = sends.filter((t) => now - t <= 60000).length
     if (rpmSends >= (cap.rpm as number)) return false
+  }
+
+  if (cap.burst !== undefined) {
+    const burstSends = sends.filter((t) => now - t <= cap.burst!.windowMs).length
+    if (burstSends >= cap.burst.count) return false
   }
 
   if (cap.rpd !== undefined) {

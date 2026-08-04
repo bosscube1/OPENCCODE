@@ -52,6 +52,9 @@ export function StatusBar(): JSX.Element {
   const messages = useStore((s) => s.messages)
   const panelTab = useStore((s) => s.panelTab)
   const setPanelTab = useStore((s) => s.setPanelTab)
+  const nanoUsage = useStore((s) => s.nanoUsage)
+  const showBalanceInStatus = useStore((s) => s.showBalanceInStatus)
+  const nanoBalance = useStore((s) => s.nanoBalance)
 
   useEffect(() => {
     const onToggleSettings = () => setShowSettings((prev) => !prev)
@@ -160,16 +163,7 @@ export function StatusBar(): JSX.Element {
       {pinnedProviderID && pinnedModelID && (pinnedProviderID !== providerID || pinnedModelID !== modelID) && (
         <button
           type="button"
-          className="app__status-item"
-          style={{
-            background: 'var(--warn, #b45309)',
-            color: 'white',
-            border: 'none',
-            padding: '2px 8px',
-            borderRadius: '4px',
-            fontSize: '11px',
-            cursor: 'pointer',
-          }}
+          className="app__status-item app__status-failover"
           title={`Failed over from ${pinnedProviderID}/${pinnedModelID}. Click to revert.`}
           onClick={() => revertToPinned()}
         >
@@ -196,6 +190,32 @@ export function StatusBar(): JSX.Element {
       </span>
 
       <span className="app__status-sep" aria-hidden="true" />
+
+      {providerID === 'nanogpt' && (
+        <span className="app__status-item" title="NanoGPT Subscription Status">
+          <span
+            className={
+              !nanoUsage
+                ? 'app__dot app__dot--warn'
+                : nanoUsage.daily.percentUsed >= 100 || nanoUsage.monthly.percentUsed >= 100
+                ? 'app__dot app__dot--bad'
+                : nanoUsage.state === 'grace' ||
+                  nanoUsage.daily.percentUsed >= 80 ||
+                  nanoUsage.monthly.percentUsed >= 80
+                ? 'app__dot app__dot--warn'
+                : 'app__dot app__dot--ok'
+            }
+            aria-hidden="true"
+          />
+          <span>NanoGPT</span>
+        </span>
+      )}
+
+      {showBalanceInStatus && nanoBalance && (
+        <span className="app__status-item" title="NanoGPT Pay-Per-Prompt Balance">
+          ${nanoBalance.usd.toFixed(2)}
+        </span>
+      )}
 
       <button
         type="button"

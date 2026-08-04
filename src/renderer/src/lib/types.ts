@@ -131,6 +131,24 @@ export type NanoImageModel = {
   tags?: string[]
 }
 
+export type NanoBalance = {
+  /** Parsed from the documented string field `usd_balance`. */
+  usd: number
+  /** Parsed from the documented string field `nano_balance`. */
+  nano: number
+  /** Documented as `nanoDepositAddress`. Omitted when absent. */
+  depositAddress?: string
+}
+export type WeeklyTokenData = { weekKey: string; inputTokens: number; outputTokens: number; totalTokens: number }
+
+/**
+ * Documented NanoGPT subscription cap (contract T3): 60 million INPUT tokens per week — NOT a
+ * total-token cap. Mirrors `WEEKLY_INPUT_TOKEN_CAP` in `src/main/tokenBudgetTracker.ts` (the
+ * renderer cannot import that module — it pulls in Electron `app`/node fs at module scope).
+ * Keep the two values in step.
+ */
+export const WEEKLY_INPUT_TOKEN_CAP = 60_000_000
+
 export type NanogptModelsResult = {
   chat: NanoChatModel[]
   image: NanoImageModel[]
@@ -156,6 +174,13 @@ export type NanoUsage = {
   state: string
   graceUntil?: string | null
 }
+
+/**
+ * Documented free-tier allowance (contract T4): 100 images/day, reset 00:00 UTC. Mirrors
+ * `DAILY_FREE_IMAGE_CAP` in `src/main/nanogptImages.ts` (the renderer cannot import that module —
+ * it pulls in Electron `app`/node fs at module scope). Keep the two values in step.
+ */
+export const DAILY_FREE_IMAGE_CAP = 100
 
 export type GeneratedImageMeta = {
   id: string

@@ -15,7 +15,8 @@ import { delimiter, join } from 'node:path'
 import { createOpencodeClient, type Event as OpencodeEvent, type OpencodeClient } from '@opencode-ai/sdk'
 import { buildChildEnv, linkedProviderIDs, loadProviderEnv, redactedSummary } from './env'
 import { loadByokEnv } from './keys'
-import { nanogptEnv, readCache } from './nanogptConfig'
+import { nanogptEnv, readCacheSync } from './nanogptConfig'
+import { tokenBudgetTracker } from './tokenBudgetTracker'
 
 export type ServerStatus = {
   running: boolean
@@ -116,6 +117,12 @@ function setStreamConnected(connected: boolean): void {
 }
 
 function emitEvent(event: OpencodeEvent): void {
+  try {
+    tokenBudgetTracker.recordEvent(event)
+  } catch {
+    /* tracker failure must never break event emission */
+  }
+
   for (const listener of eventListeners) {
     try {
       listener(event)
@@ -373,7 +380,7 @@ async function doStart(): Promise<ServerStatus> {
   const nanogptVars = nanogptEnv(Boolean(mergedProviderVars.NANOGPT_API_KEY))
   const childEnv = buildChildEnv(mergedProviderVars, nanogptVars)
   if (nanogptVars.OPENCODE_CONFIG_CONTENT) {
-    record(`nanogpt: injected ${readCache().chat.length} subscription models`)
+    record(`nanogpt: injected ${readCacheSync().chat.length} subscription models`)
   }
   authorizedProviderIDs = new Set(linkedProviderIDs(childEnv))
   record(`authorized API-key providers: ${[...authorizedProviderIDs].join(', ') || 'none'}`)

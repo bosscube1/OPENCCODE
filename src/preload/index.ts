@@ -224,6 +224,15 @@ export type NanoUsage = {
   state: string
   graceUntil?: string | null
 }
+export type NanoBalance = {
+  /** Parsed from the documented string field `usd_balance`. */
+  usd: number
+  /** Parsed from the documented string field `nano_balance`. */
+  nano: number
+  /** Documented as `nanoDepositAddress`. Omitted when absent. */
+  depositAddress?: string
+}
+export type WeeklyTokenData = { weekKey: string; inputTokens: number; outputTokens: number; totalTokens: number }
 export type GeneratedImageMeta = {
   id: string
   sessionID: string | null
@@ -440,7 +449,9 @@ export interface OpencodeApi {
     models(): Promise<NanogptModelsResult>
     /** Re-fetch both catalogues from NanoGPT and rewrite the cache. */
     refresh(): Promise<NanogptRefreshResult>
-    usage(): Promise<NanoUsage>
+    usage(): Promise<NanoUsage | null>
+    balance(): Promise<NanoBalance | null>
+    weeklyUsage(): Promise<WeeklyTokenData>
     /** Generate images. Throws when the model is known to bill balance and consent was not given. */
     generate(a: NanogptGenerateArgs): Promise<NanogptGenerateResult>
     images: {
@@ -449,6 +460,7 @@ export interface OpencodeApi {
       /** Base64 PNG bytes, or null when the file is gone. */
       read(id: string): Promise<string | null>
       remove(id: string): Promise<void>
+      today(): Promise<number>
     }
   }
   messages(directory: string, sessionID: string): Promise<MessageWithParts[]>
@@ -602,11 +614,14 @@ const api: OpencodeApi = {
     models: () => ipcRenderer.invoke('oc:nanogpt:models'),
     refresh: () => ipcRenderer.invoke('oc:nanogpt:refresh'),
     usage: () => ipcRenderer.invoke('oc:nanogpt:usage'),
+    balance: () => ipcRenderer.invoke('oc:nanogpt:balance'),
+    weeklyUsage: () => ipcRenderer.invoke('oc:nanogpt:weeklyUsage'),
     generate: (a) => ipcRenderer.invoke('oc:nanogpt:generate', a),
     images: {
       list: (sessionID) => ipcRenderer.invoke('oc:nanogpt:images:list', sessionID),
       read: (id) => ipcRenderer.invoke('oc:nanogpt:images:read', id),
-      remove: (id) => ipcRenderer.invoke('oc:nanogpt:images:delete', id)
+      remove: (id) => ipcRenderer.invoke('oc:nanogpt:images:delete', id),
+      today: () => ipcRenderer.invoke('oc:nanogpt:images:today')
     }
   },
   messages: (directory, sessionID) => ipcRenderer.invoke('oc:messages:list', directory, sessionID),

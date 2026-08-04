@@ -211,7 +211,10 @@ Every handler returns `Promise<T>` and **throws** on failure (renderer catches).
 // --- NanoGPT: subscription catalogue + quota ---
 'oc:nanogpt:models'     () => NanogptModelsResult   // cached, no network
 'oc:nanogpt:refresh'    () => NanogptRefreshResult  // re-fetch both catalogues
-'oc:nanogpt:usage'      () => NanoUsage             // live subscription quota
+'oc:nanogpt:usage'      () => NanoUsage | null      // live subscription quota; null on failure (T2)
+'oc:nanogpt:balance'    () => NanoBalance | null    // live pay-per-prompt balance; null on failure (T2)
+'oc:nanogpt:weeklyUsage' () => WeeklyTokenData      // weekly input/output token usage
+'oc:nanogpt:images:today' () => number              // local-index count of images generated since UTC midnight
 
 // --- NanoGPT: image generation (SPENDS MONEY — see the guard rules below) ---
 'oc:nanogpt:generate'   (args: NanogptGenerateArgs) => NanogptGenerateResult
@@ -422,12 +425,15 @@ export interface OpencodeApi {
     /** Cached catalogues — cheap, synchronous in main, no network. */
     models(): Promise<NanogptModelsResult>
     refresh(): Promise<NanogptRefreshResult>
-    usage(): Promise<NanoUsage>
+    usage(): Promise<NanoUsage | null>
+    balance(): Promise<NanoBalance | null>
+    weeklyUsage(): Promise<WeeklyTokenData>
     generate(a: NanogptGenerateArgs): Promise<NanogptGenerateResult>
     images: {
       list(sessionID?: string): Promise<GeneratedImageMeta[]>
       read(id: string): Promise<string | null>
       remove(id: string): Promise<void>
+      today(): Promise<number>
     }
   }
   messages(directory: string, sessionID: string): Promise<MessageWithParts[]>
@@ -580,6 +586,31 @@ inject an empty model map.
 subscription. NanoGPT exposes **no** API field marking per-image-model subscription inclusion (the
 help page states the included set varies), so the generation response's `paymentSource` is the only
 machine-readable ground truth and inclusion is learned empirically.
+
+**Balance shape (T1).** The documented `POST /api/check-balance` response carries `usd_balance` /
+`nano_balance` as STRINGS, parsed with `Number.parseFloat`:
+
+```ts
+export type NanoBalance = {
+  usd: number             // parsed from usd_balance; a non-finite parse is a hard error (throws)
+  nano: number             // parsed from nano_balance; non-finite falls back to 0
+  depositAddress?: string  // documented as nanoDepositAddress; omitted when absent
+}
+```
+
+**Nullability on failure (T2).** `oc:nanogpt:balance` and `oc:nanogpt:usage` resolve to `null` on a
+network/parse failure rather than a zero-valued placeholder — `$0.00` and "unknown" are different UI
+states. `usage(): Promise<NanoUsage | null>`, `balance(): Promise<NanoBalance | null>` in preload and
+the renderer.
+
+**Weekly token budget (T3).** The documented subscription cap is 60 million **input** tokens per
+week, not total. `WEEKLY_INPUT_TOKEN_CAP = 60_000_000` is exported from
+`src/main/tokenBudgetTracker.ts`; any gauge/percentage MUST compare `weeklyUsage.inputTokens`
+against that constant, never `totalTokens`.
+
+```ts
+export type WeeklyTokenData = { weekKey: string; inputTokens: number; outputTokens: number; totalTokens: number }
+```
 
 ## NanoGPT image generation
 

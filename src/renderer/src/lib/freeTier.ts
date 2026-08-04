@@ -178,7 +178,7 @@ export function poolForTask(task: TaskKind): readonly FreeTierEntry[] {
  * deliberately pessimistic guesses, so a 429 from them carries information the table
  * does not — the router should trust observed 429s over these constants.
  */
-export const OPAQUE_RPM_PROVIDERS: ReadonlySet<string> = new Set(['mistral', 'nanogpt'])
+export const OPAQUE_RPM_PROVIDERS: ReadonlySet<string> = new Set(['mistral'])
 
 /**
  * THE rate-cap table. Both the router and the Routing panel read this — previously the
@@ -208,10 +208,8 @@ export const OPAQUE_RPM_PROVIDERS: ReadonlySet<string> = new Set(['mistral', 'na
  * quota had already reset.
  */
 export const FREE_PROVIDER_CAPS: ModelCapsMap = {
-  // GUESS: NanoGPT publishes no per-minute/per-day request limits. Subscription quota is
-  // enforced server-side and surfaced separately via nanogpt.usage(). Provider-scoped
-  // because there is no per-model information to key on.
-  nanogpt: { rpm: 60 },
+  // NanoGPT: 60 RPM limit + 10 requests per 10s burst window limit.
+  nanogpt: { rpm: 60, burst: { count: 10, windowMs: 10_000 } },
 
   // Mistral stopped publishing free-tier RPM; real ceilings only appear in their admin
   // console. 2 rpm is the lowest figure currently reported for the free Experiment tier —

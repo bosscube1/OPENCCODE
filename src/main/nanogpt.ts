@@ -91,16 +91,97 @@ function authHeaders(key: string, json: boolean): Record<string, string> {
   return json ? { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' } : { Authorization: `Bearer ${key}` }
 }
 
-/** Build a safe, redacted error message for a non-ok HTTP response (status + reason + truncated body only, never headers). */
-async function httpError(res: Response, action: string): Promise<Error> {
-  let bodySnippet = ''
+/**
+ * An Error thrown from this module for an HTTP-level or network-level failure. `status` is
+ * absent for network failures (DNS/socket/TLS/abort — see `networkError`). `code` is the
+ * machine-readable error code from the JSON error body (contract T6), when present. `requestId`
+ * is the `X-Request-ID` response header (support correlation id — never a secret). `retryable`
+ * and `retryAfterMs` drive `withRetry`; they are internal to this module and not part of the
+ * public contract.
+ */
+export type NanoGptError = Error & {
+  status?: number
+  code?: string
+  requestId?: string
+  retryable?: boolean
+  retryAfterMs?: number
+}
+
+/** HTTP statuses that are safe to retry per contract T5. */
+const RETRYABLE_STATUSES = new Set([408, 429, 500, 503])
+
+/** `Retry-After` values above this many seconds are not worth waiting for — fail fast instead. */
+const MAX_RETRY_AFTER_SEC = 30
+
+/** Extract the documented machine-readable `code` from a parsed JSON error body, if present. */
+function extractErrorCode(parsed: unknown): string | undefined {
+  if (!isRecord(parsed)) return undefined
+  if (typeof parsed.code === 'string') return parsed.code
+  if (isRecord(parsed.error) && typeof parsed.error.code === 'string') return parsed.error.code
+  return undefined
+}
+
+/** Parse a `Retry-After` header value per contract T5: integer seconds only. */
+function parseRetryAfterSeconds(header: string | null): number | undefined {
+  if (!header) return undefined
+  const trimmed = header.trim()
+  if (!/^\d+$/.test(trimmed)) return undefined
+  return Number(trimmed)
+}
+
+/**
+ * Build a safe, redacted error for a non-ok HTTP response (status + reason + truncated body
+ * only, never headers except the documented `X-Request-ID` support handle). Attaches `status`,
+ * `code` (contract T6), `requestId` (contract T3/T5), and retry metadata (contract T5) used by
+ * `withRetry`.
+ */
+async function httpError(res: Response, action: string): Promise<NanoGptError> {
+  let bodyText = ''
   try {
-    bodySnippet = (await res.text()).slice(0, 200)
+    bodyText = await res.text()
   } catch {
     // ignore — body may already be consumed or unreadable
   }
-  const raw = `${action} failed: ${res.status} ${res.statusText}${bodySnippet ? ` — ${bodySnippet}` : ''}`
-  return new Error(safeError(new Error(raw)))
+  let parsedBody: unknown
+  try {
+    parsedBody = bodyText ? JSON.parse(bodyText) : undefined
+  } catch {
+    // body wasn't JSON — no machine-readable code available
+  }
+  const code = extractErrorCode(parsedBody)
+  const requestId = res.headers.get('X-Request-ID') ?? undefined
+
+  const bodySnippet = bodyText.slice(0, 200)
+  let raw = `${action} failed: ${res.status} ${res.statusText}${bodySnippet ? ` — ${bodySnippet}` : ''}`
+  if (requestId) raw += ` (X-Request-ID: ${requestId})`
+
+  const error = new Error(safeError(new Error(raw))) as NanoGptError
+  error.status = res.status
+  if (code) error.code = code
+  if (requestId) error.requestId = requestId
+
+  if (res.status === 429) {
+    const retryAfterSec = parseRetryAfterSeconds(res.headers.get('Retry-After'))
+    if (retryAfterSec === undefined) {
+      error.retryable = true
+    } else if (retryAfterSec <= MAX_RETRY_AFTER_SEC) {
+      error.retryable = true
+      error.retryAfterMs = retryAfterSec * 1000
+    } else {
+      // Beyond the cap: fail fast rather than hanging the UI for the requested duration.
+      error.retryable = false
+    }
+  } else {
+    error.retryable = RETRYABLE_STATUSES.has(res.status)
+  }
+  return error
+}
+
+/** Build the redacted "unable to reach" error for a genuine network-level failure (never an HTTP status). Always retryable. */
+function networkError(error: unknown): NanoGptError {
+  const wrapped = new Error(`Unable to reach NanoGPT: ${safeError(error)}`) as NanoGptError
+  wrapped.retryable = true
+  return wrapped
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -163,19 +244,60 @@ function hasNonEmptyId(entry: unknown): entry is Record<string, unknown> {
   return isRecord(entry) && typeof entry.id === 'string' && entry.id.length > 0
 }
 
+/** Maximum number of retries (contract T5: "max 2 retries"). */
+const MAX_RETRIES = 2
+
+/** Exponential backoff with jitter: 500ms, 1000ms, ... plus up to 50% random jitter. */
+function backoffWithJitter(attempt: number): number {
+  const base = 500 * 2 ** attempt
+  return base + Math.random() * base * 0.5
+}
+
+/**
+ * Retry a fetch-based operation per contract T5: retry only on 408/429/500/503 responses
+ * (`NanoGptError.retryable === true`, set by `httpError`) or a genuine network-level rejection
+ * (set by `networkError`) — never on other 4xx business errors, and never on JSON-parsing or
+ * response-shape validation failures (those are plain `Error`s with no `retryable` flag).
+ * Exponential backoff with jitter; honours an explicit `retryAfterMs` (from the `Retry-After`
+ * header on 429) in place of the computed backoff. Max `MAX_RETRIES` retries.
+ */
+async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  let attempt = 0
+  for (;;) {
+    try {
+      return await fn()
+    } catch (error) {
+      const classified = error as NanoGptError
+      if (!classified.retryable || attempt >= MAX_RETRIES) throw error
+      const delayMs = classified.retryAfterMs ?? backoffWithJitter(attempt)
+      await new Promise((resolve) => setTimeout(resolve, delayMs))
+      attempt++
+    }
+  }
+}
+
+/** Shared GET/POST-with-retry helper: performs the fetch, classifies network/HTTP failures per contract T5, and returns the ok `Response`. */
+async function fetchWithRetry(path: string, init: RequestInit, action: string): Promise<Response> {
+  return withRetry(async () => {
+    let res: Response
+    try {
+      res = await fetch(`${BASE}${path}`, init)
+    } catch (error) {
+      throw networkError(error)
+    }
+    if (!res.ok) throw await httpError(res, action)
+    return res
+  })
+}
+
 /** List chat/text models available on the caller's NanoGPT subscription. */
 export async function fetchSubscriptionModels(): Promise<NanoChatModel[]> {
   const key = getApiKey()
-  let res: Response
-  try {
-    res = await fetch(`${BASE}/api/subscription/v1/models?detailed=true`, {
-      headers: authHeaders(key, false),
-      signal: AbortSignal.timeout(8000)
-    })
-  } catch (error) {
-    throw new Error(`Unable to reach NanoGPT: ${safeError(error)}`)
-  }
-  if (!res.ok) throw await httpError(res, 'Fetching NanoGPT subscription models')
+  const res = await fetchWithRetry(
+    '/api/subscription/v1/models?detailed=true',
+    { headers: authHeaders(key, false), signal: AbortSignal.timeout(8000) },
+    'Fetching NanoGPT subscription models'
+  )
   let payload: unknown
   try {
     payload = await res.json()
@@ -188,16 +310,15 @@ export async function fetchSubscriptionModels(): Promise<NanoChatModel[]> {
 /** List image-generation models available on NanoGPT. */
 export async function fetchImageModels(): Promise<NanoImageModel[]> {
   const key = getApiKey()
-  let res: Response
-  try {
-    res = await fetch(`${BASE}/api/v1/image-models`, {
-      headers: authHeaders(key, false),
-      signal: AbortSignal.timeout(8000)
-    })
-  } catch (error) {
-    throw new Error(`Unable to reach NanoGPT: ${safeError(error)}`)
-  }
-  if (!res.ok) throw await httpError(res, 'Fetching NanoGPT image models')
+  // Path per contract T7 / spec D6: the reference documents GET /api/v1/images/models, but this
+  // code has always called GET /api/v1/image-models. D6 requires a live probe of both before
+  // swapping on the strength of the doc alone — no API key was available in this environment
+  // (see M1 report), so the probe was not run and this path is left unchanged.
+  const res = await fetchWithRetry(
+    '/api/v1/image-models',
+    { headers: authHeaders(key, false), signal: AbortSignal.timeout(8000) },
+    'Fetching NanoGPT image models'
+  )
   let payload: unknown
   try {
     payload = await res.json()
@@ -220,16 +341,11 @@ function toUsageBucket(value: unknown): { used: number; remaining: number; perce
 /** Fetch the caller's current subscription usage/limits. Throws a readable Error if the response shape is unusable. */
 export async function fetchSubscriptionUsage(): Promise<NanoUsage> {
   const key = getApiKey()
-  let res: Response
-  try {
-    res = await fetch(`${BASE}/api/subscription/v1/usage`, {
-      headers: authHeaders(key, false),
-      signal: AbortSignal.timeout(8000)
-    })
-  } catch (error) {
-    throw new Error(`Unable to reach NanoGPT: ${safeError(error)}`)
-  }
-  if (!res.ok) throw await httpError(res, 'Fetching NanoGPT subscription usage')
+  const res = await fetchWithRetry(
+    '/api/subscription/v1/usage',
+    { headers: authHeaders(key, false), signal: AbortSignal.timeout(8000) },
+    'Fetching NanoGPT subscription usage'
+  )
   let payload: unknown
   try {
     payload = await res.json()
@@ -258,6 +374,51 @@ export async function fetchSubscriptionUsage(): Promise<NanoUsage> {
   if (typeof payload.enforceDailyLimit === 'boolean') usage.enforceDailyLimit = payload.enforceDailyLimit
   if (typeof payload.graceUntil === 'string' || payload.graceUntil === null) usage.graceUntil = payload.graceUntil
   return usage
+}
+
+/**
+ * Canonical balance shape per contract T1. The documented `POST /api/check-balance` response
+ * carries `usd_balance` / `nano_balance` as STRINGS (not numbers) — see the vendored API
+ * reference. `usd` is a hard parse failure (throws) when non-finite; `nano` falls back to `0`.
+ */
+export type NanoBalance = {
+  /** Parsed from the documented string field `usd_balance`. */
+  usd: number
+  /** Parsed from the documented string field `nano_balance`. */
+  nano: number
+  /** Documented as `nanoDepositAddress`. Omitted when absent. */
+  depositAddress?: string
+}
+
+/** Fetch the caller's current pay-per-prompt balance. */
+export async function fetchBalance(): Promise<NanoBalance> {
+  const key = getApiKey()
+  const res = await fetchWithRetry(
+    '/api/check-balance',
+    { method: 'POST', headers: authHeaders(key, true), body: JSON.stringify({}), signal: AbortSignal.timeout(8000) },
+    'Checking NanoGPT balance'
+  )
+  let payload: unknown
+  try {
+    payload = await res.json()
+  } catch (error) {
+    throw new Error(`Unable to parse NanoGPT balance response: ${safeError(error)}`)
+  }
+  if (!isRecord(payload)) throw new Error('NanoGPT balance response was not a JSON object.')
+
+  const usdRaw = payload.usd_balance
+  const usd = typeof usdRaw === 'string' ? Number.parseFloat(usdRaw) : NaN
+  if (!Number.isFinite(usd)) {
+    throw new Error('NanoGPT balance response has a missing or non-numeric usd_balance.')
+  }
+  const nanoRaw = payload.nano_balance
+  const nanoParsed = typeof nanoRaw === 'string' ? Number.parseFloat(nanoRaw) : NaN
+  const nano = Number.isFinite(nanoParsed) ? nanoParsed : 0
+
+  const balance: NanoBalance = { usd, nano }
+  const depositAddress = stringOrUndefined(payload.nanoDepositAddress)
+  if (depositAddress !== undefined) balance.depositAddress = depositAddress
+  return balance
 }
 
 type GenerationEntry = { b64: string; mime: string }
@@ -299,18 +460,30 @@ export async function generateImage(req: NanoImageRequest): Promise<NanoImageRes
     response_format: 'b64_json'
   }
   if (req.size !== undefined) body.size = req.size
+  const action = 'Generating an image with NanoGPT'
 
+  // Retries (contract T5, including 429/Retry-After handling — folded in here per D5 so all
+  // five endpoints share identical retry/error behaviour) happen within a single endpoint
+  // attempt. 404/405 pass through un-thrown so the caller can fall back to the other endpoint —
+  // any other non-ok status after retries are exhausted is a real failure and is NOT retried
+  // against the fallback endpoint, since that could spend balance twice.
   const attempt = async (path: string): Promise<Response> => {
-    try {
-      return await fetch(`${BASE}${path}`, {
-        method: 'POST',
-        headers: authHeaders(key, true),
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(120000)
-      })
-    } catch (error) {
-      throw new Error(`Unable to reach NanoGPT: ${safeError(error)}`)
-    }
+    return withRetry(async () => {
+      let res: Response
+      try {
+        res = await fetch(`${BASE}${path}`, {
+          method: 'POST',
+          headers: authHeaders(key, true),
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(120000)
+        })
+      } catch (error) {
+        throw networkError(error)
+      }
+      if (res.status === 404 || res.status === 405) return res
+      if (!res.ok) throw await httpError(res, action)
+      return res
+    })
   }
 
   let res = await attempt('/api/subscription/v1/images/generations')
@@ -318,8 +491,10 @@ export async function generateImage(req: NanoImageRequest): Promise<NanoImageRes
   if (res.status === 404 || res.status === 405) {
     res = await attempt('/v1/images/generations')
     route = 'standard'
+    if (res.status === 404 || res.status === 405) {
+      throw await httpError(res, action)
+    }
   }
-  if (!res.ok) throw await httpError(res, 'Generating an image with NanoGPT')
 
   let payload: unknown
   try {

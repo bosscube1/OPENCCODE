@@ -12,9 +12,11 @@
  * does not pull every image into renderer memory; `readImage` fetches bytes on demand.
  */
 import { app } from 'electron'
-import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { readFile, writeFile, readdir, unlink } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { basename, join } from 'node:path'
+import { classifyBilling } from './nanogptBilling'
 
 /** One generated image's metadata. Carries no pixel data — see `readImage`. */
 export type GeneratedImageMeta = {
@@ -83,35 +85,72 @@ function toMeta(value: unknown): GeneratedImageMeta | null {
   return meta
 }
 
-/** Read the index. A missing or corrupt file reads as empty and never throws. */
-export function readIndex(): ImageIndex {
+/** Shared parse/sanitize step for the index file contents (D3: dedupes the sync/async readers). */
+function parseIndex(raw: string): ImageIndex {
+  const parsed = JSON.parse(raw) as unknown
+  if (!isRecord(parsed) || !Array.isArray(parsed.images)) return { version: 1, images: [] }
+  const images = parsed.images
+    .map(toMeta)
+    .filter((meta): meta is GeneratedImageMeta => meta !== null)
+  return { version: 1, images }
+}
+
+/** Read the index synchronously. A missing or corrupt file reads as empty and never throws. */
+export function readIndexSync(): ImageIndex {
   try {
     const path = indexPath()
     if (!existsSync(path)) return { version: 1, images: [] }
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown
-    if (!isRecord(parsed) || !Array.isArray(parsed.images)) return { version: 1, images: [] }
-    const images = parsed.images
-      .map(toMeta)
-      .filter((meta): meta is GeneratedImageMeta => meta !== null)
-    return { version: 1, images }
+    return parseIndex(readFileSync(path, 'utf8'))
   } catch {
     return { version: 1, images: [] }
   }
 }
 
-function writeIndex(index: ImageIndex): void {
-  writeFileSync(indexPath(), `${JSON.stringify(index, null, 2)}\n`, 'utf8')
+/**
+ * Read the index asynchronously. Missing file (ENOENT) reads as empty rather than probing with a
+ * blocking `existsSync` first (D2) — that call was both a needless sync syscall in async code and a
+ * TOCTOU window against a concurrent `deleteImage`/write.
+ */
+export async function readIndex(): Promise<ImageIndex> {
+  try {
+    const raw = await readFile(indexPath(), 'utf8')
+    return parseIndex(raw)
+  } catch {
+    // ENOENT (no file yet) and corrupt/unreadable contents both read as an empty index.
+    return { version: 1, images: [] }
+  }
+}
+
+async function writeIndex(index: ImageIndex): Promise<void> {
+  await writeFile(indexPath(), `${JSON.stringify(index, null, 2)}\n`, 'utf8')
+}
+
+/**
+ * Serialize all `index.json` mutations behind a single module-level promise chain (D1).
+ *
+ * `saveImage`, `deleteImage`, and `reconcile` each do read-modify-write on the same file; without
+ * this lock, concurrent callers interleave their reads and the last writer wins, silently dropping
+ * every other caller's entry. Chaining every mutation onto `tail` forces them to run one at a time,
+ * in call order, regardless of how many run concurrently at the call site.
+ */
+let tail: Promise<unknown> = Promise.resolve()
+function withIndexLock<T>(fn: () => Promise<T>): Promise<T> {
+  const result = tail.then(fn, fn)
+  // Swallow rejections in the chain itself so one failed mutation doesn't wedge the queue for
+  // everyone after it; callers still observe their own rejection via `result`.
+  tail = result.catch(() => undefined)
+  return result
 }
 
 /** Newest first. Optionally scoped to one session for transcript rehydration. */
-export function listImages(sessionID?: string): GeneratedImageMeta[] {
-  const all = readIndex().images
+export async function listImages(sessionID?: string): Promise<GeneratedImageMeta[]> {
+  const all = (await readIndex()).images
   const scoped = sessionID === undefined ? all : all.filter((meta) => meta.sessionID === sessionID)
   return [...scoped].sort((a, b) => b.createdAt - a.createdAt)
 }
 
 /** Persist one generated image and return its metadata. */
-export function saveImage(args: {
+export async function saveImage(args: {
   base64: string
   sessionID: string | null
   prompt: string
@@ -119,12 +158,12 @@ export function saveImage(args: {
   size?: string
   paymentSource?: string
   cost?: number
-}): GeneratedImageMeta {
+}): Promise<GeneratedImageMeta> {
   const buffer = Buffer.from(args.base64, 'base64')
   if (buffer.byteLength === 0) throw new Error('Refusing to store an empty image.')
 
   const id = randomUUID()
-  writeFileSync(imagePath(id), buffer)
+  await writeFile(imagePath(id), buffer)
 
   const meta: GeneratedImageMeta = {
     id,
@@ -138,77 +177,103 @@ export function saveImage(args: {
   if (args.paymentSource !== undefined) meta.paymentSource = args.paymentSource
   if (args.cost !== undefined) meta.cost = args.cost
 
-  const index = readIndex()
-  const images = [...index.images, meta]
+  // Read-modify-write of index.json must be serialized (D1): each saveImage's PNG write is
+  // independent and stays outside the lock, but the index mutation itself is queued behind
+  // withIndexLock so concurrent calls never clobber each other's entry.
+  await withIndexLock(async () => {
+    const index = await readIndex()
+    const images = [...index.images, meta]
 
-  // Prune oldest past the cap, deleting their files too so the directory cannot grow unbounded.
-  if (images.length > MAX_RETAINED) {
-    const byAge = [...images].sort((a, b) => a.createdAt - b.createdAt)
-    const excess = byAge.slice(0, images.length - MAX_RETAINED)
-    for (const stale of excess) {
-      try {
-        unlinkSync(imagePath(stale.id))
-      } catch {
-        /* file already gone — the index entry is dropped either way */
+    // Prune oldest past the cap, deleting their files too so the directory cannot grow unbounded.
+    if (images.length > MAX_RETAINED) {
+      const byAge = [...images].sort((a, b) => a.createdAt - b.createdAt)
+      const excess = byAge.slice(0, images.length - MAX_RETAINED)
+      for (const stale of excess) {
+        try {
+          await unlink(imagePath(stale.id))
+        } catch {
+          /* file already gone — the index entry is dropped either way */
+        }
       }
+      const dropped = new Set(excess.map((entry) => entry.id))
+      await writeIndex({ version: 1, images: images.filter((entry) => !dropped.has(entry.id)) })
+    } else {
+      await writeIndex({ version: 1, images })
     }
-    const dropped = new Set(excess.map((entry) => entry.id))
-    writeIndex({ version: 1, images: images.filter((entry) => !dropped.has(entry.id)) })
-  } else {
-    writeIndex({ version: 1, images })
-  }
+  })
 
   return meta
 }
 
-/** Read one image's bytes as base64 for display. Returns null when the file is gone. */
-export function readImage(id: string): string | null {
+/**
+ * Read one image's bytes as base64 for display. Returns null when the file is gone.
+ *
+ * Goes straight to `readFile` and treats `ENOENT` as absent (D2) rather than probing with
+ * `existsSync` first — that pattern is both a blocking syscall in async code and a TOCTOU window
+ * against a concurrent `deleteImage` removing the file between the check and the read.
+ */
+export async function readImage(id: string): Promise<string | null> {
   try {
-    const path = imagePath(id)
-    if (!existsSync(path)) return null
-    return readFileSync(path).toString('base64')
+    const buffer = await readFile(imagePath(id))
+    return buffer.toString('base64')
   } catch {
     return null
   }
 }
 
 /** Delete one image and its index entry. Safe to call for an unknown id. */
-export function deleteImage(id: string): void {
+export async function deleteImage(id: string): Promise<void> {
   const path = imagePath(id)
   try {
-    if (existsSync(path)) unlinkSync(path)
+    await unlink(path)
   } catch {
-    /* best effort — the index entry is still removed below */
+    /* best effort — ENOENT (already gone) or any other failure; the index entry is still removed below */
   }
-  const index = readIndex()
-  writeIndex({ version: 1, images: index.images.filter((meta) => meta.id !== id) })
+  await withIndexLock(async () => {
+    const index = await readIndex()
+    await writeIndex({ version: 1, images: index.images.filter((meta) => meta.id !== id) })
+  })
 }
+
+let lastReconcileAt = 0
+const RECONCILE_THROTTLE_MS = 10_000
 
 /**
  * Drop index entries whose PNG has vanished (manual deletion, failed write, disk repair) and
  * orphaned PNGs with no index entry. Keeps the gallery from showing permanently-broken tiles.
  */
-export function reconcile(): { removedEntries: number; removedFiles: number } {
+export async function reconcile(options?: { force?: boolean }): Promise<{ removedEntries: number; removedFiles: number }> {
+  const now = Date.now()
+  if (!options?.force && now - lastReconcileAt < RECONCILE_THROTTLE_MS) {
+    return { removedEntries: 0, removedFiles: 0 }
+  }
+  lastReconcileAt = now
   const dir = imagesDir()
-  const index = readIndex()
-  const live = index.images.filter((meta) => {
-    try {
-      return existsSync(imagePath(meta.id))
-    } catch {
-      return false
-    }
+  // The read-modify-write of index.json is serialized with saveImage/deleteImage (D1) so a
+  // reconcile pass racing a concurrent save cannot drop an entry that was written after this
+  // reconcile started reading.
+  const { removedEntries, live } = await withIndexLock(async () => {
+    const index = await readIndex()
+    const liveImages = index.images.filter((meta) => {
+      try {
+        return existsSync(imagePath(meta.id))
+      } catch {
+        return false
+      }
+    })
+    const removed = index.images.length - liveImages.length
+    if (removed > 0) await writeIndex({ version: 1, images: liveImages })
+    return { removedEntries: removed, live: liveImages }
   })
-  const removedEntries = index.images.length - live.length
-  if (removedEntries > 0) writeIndex({ version: 1, images: live })
 
   const known = new Set(live.map((meta) => `${meta.id}.png`))
   let removedFiles = 0
   try {
-    for (const name of readdirSync(dir)) {
+    for (const name of await readdir(dir)) {
       if (name === 'index.json' || known.has(name)) continue
       if (!name.toLowerCase().endsWith('.png')) continue
       try {
-        unlinkSync(join(dir, name))
+        await unlink(join(dir, name))
         removedFiles += 1
       } catch {
         /* leave it; a locked file is not worth failing over */
@@ -218,4 +283,28 @@ export function reconcile(): { removedEntries: number; removedFiles: number } {
     /* unreadable directory — nothing to reconcile */
   }
   return { removedEntries, removedFiles }
+}
+
+/** Documented free-tier allowance (contract T4): 100 images/day, reset 00:00 UTC. */
+export const DAILY_FREE_IMAGE_CAP = 100
+
+/**
+ * Count images generated since UTC midnight that counted against the free-tier allowance.
+ *
+ * Entries billed to balance (per `classifyBilling`) are excluded — they did not consume the free
+ * quota, so counting them would under-count remaining free generations.
+ *
+ * This is a local, best-effort figure, NOT an authoritative account-wide count: it only reflects
+ * generations this install persisted, and it silently under-reports once retention
+ * (`MAX_RETAINED`) or `reconcile()` has pruned older entries from today. There is no documented
+ * endpoint to read the server's authoritative daily counter.
+ */
+export async function imagesToday(): Promise<number> {
+  const midnight = new Date()
+  midnight.setUTCHours(0, 0, 0, 0)
+  const cutoff = midnight.getTime()
+  const index = await readIndex()
+  return index.images.filter(
+    (meta) => meta.createdAt >= cutoff && classifyBilling(meta.paymentSource) !== 'balance'
+  ).length
 }

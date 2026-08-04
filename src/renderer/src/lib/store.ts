@@ -40,6 +40,7 @@ import { createSessionSlice } from './slices/sessionSlice'
 import { createSubagentSlice } from './slices/subagentSlice'
 import { createTerminalSlice } from './slices/terminalSlice'
 import { createUiSlice } from './slices/uiSlice'
+import { createNanoQuotaSlice, startNanoQuotaPolling } from './slices/nanoQuotaSlice'
 import { registerStore } from './slices/storeRef'
 import type { AppState, SetState, GetState } from './slices/types'
 import type { Provider } from './types'
@@ -64,6 +65,7 @@ export const useStore = create<AppState>()((set, get) => {
     ...createGitSlice(setState, getState),
     ...createTerminalSlice(setState, getState),
     ...createEventSlice(setState, getState),
+    ...createNanoQuotaSlice(setState, getState),
 
     async init(): Promise<void> {
       subscribe()
@@ -125,6 +127,7 @@ export const useStore = create<AppState>()((set, get) => {
         showPaidModels: prefs.showPaidModels,
         compareTargets: prefs.compareTargets,
         viewMode: prefs.viewMode,
+        showBalanceInStatus: prefs.showBalanceInStatus,
       })
       savePrefs({
         directory: prefs.directory,
@@ -135,10 +138,12 @@ export const useStore = create<AppState>()((set, get) => {
         routingMode: prefs.routingMode,
         showPaidModels: prefs.showPaidModels,
         viewMode: prefs.viewMode,
+        showBalanceInStatus: prefs.showBalanceInStatus,
       })
 
       await appSettingsReady
       await get().loadProjects()
+      startNanoQuotaPolling(getState)
 
       if (prefs.directory) {
         await get().setDirectory(prefs.directory)

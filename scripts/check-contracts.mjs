@@ -258,6 +258,49 @@ if (extraMethods.length > 0) {
   for (const method of extraMethods) console.log(`          window.api.${method}`)
 }
 
+/* ------------------------------------------------------------------ */
+/* 5. Cross-process constant mirrors                                   */
+/* ------------------------------------------------------------------ */
+
+/*
+ * These encode documented NanoGPT API limits. The renderer cannot import the main-process
+ * module that owns each one (those pull in Electron `app` / node `fs`), so the value is
+ * duplicated in `src/renderer/src/lib/types.ts`. Duplication is the constraint; silent
+ * divergence is not — a limit that drifts on one side of the boundary is a wrong number on
+ * a user-facing gauge.
+ */
+const MIRRORED_CONSTANTS = [
+  { name: 'WEEKLY_INPUT_TOKEN_CAP', source: 'src/main/tokenBudgetTracker.ts' },
+  { name: 'DAILY_FREE_IMAGE_CAP', source: 'src/main/nanogptImages.ts' }
+]
+
+const RENDERER_TYPES_FILE = path.join(root, 'src/renderer/src/lib/types.ts')
+
+function constantValue(source, name) {
+  const match = source.match(new RegExp(`export const ${name}\\s*=\\s*([0-9_]+)`))
+  return match ? match[1].replace(/_/g, '') : null
+}
+
+const rendererTypes = readFileSync(RENDERER_TYPES_FILE, 'utf8')
+const drifted = []
+for (const { name, source } of MIRRORED_CONSTANTS) {
+  const mainValue = constantValue(readFileSync(path.join(root, source), 'utf8'), name)
+  const rendererValue = constantValue(rendererTypes, name)
+  if (mainValue === null || rendererValue === null || mainValue !== rendererValue) {
+    drifted.push({ name, source, mainValue, rendererValue })
+  }
+}
+
+if (drifted.length === 0) {
+  console.log('OK      mirrored constants: main and renderer agree')
+} else {
+  failed = true
+  console.log('MISMATCH mirrored constants differ between main and renderer:')
+  for (const { name, source, mainValue, rendererValue } of drifted) {
+    console.log(`          ${name}: ${source} = ${mainValue ?? 'NOT FOUND'}, renderer types.ts = ${rendererValue ?? 'NOT FOUND'}`)
+  }
+}
+
 console.log('')
 if (failed) {
   console.log('FAIL: CONTRACTS.md is out of sync with the code. Update CONTRACTS.md (or the code) and re-run.')
