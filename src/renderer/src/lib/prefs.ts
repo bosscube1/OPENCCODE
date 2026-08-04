@@ -31,6 +31,8 @@ export type Prefs = {
   compareTargets: string[]
   /** Transcript density: Normal / Verbose / Summary. */
   viewMode: ViewMode
+  /** Show NanoGPT account balance in status bar. Default false. */
+  showBalanceInStatus: boolean
 }
 
 export const EMPTY_PREFS: Prefs = {
@@ -45,6 +47,7 @@ export const EMPTY_PREFS: Prefs = {
   showPaidModels: false,
   compareTargets: [],
   viewMode: 'normal',
+  showBalanceInStatus: false,
 }
 
 /** Raw shape that may exist in localStorage (legacy or current). */
@@ -121,6 +124,7 @@ export function loadPrefs(): Prefs {
             })
         : [],
       viewMode: isViewMode(parsed.viewMode) ? parsed.viewMode : 'normal',
+      showBalanceInStatus: typeof parsed.showBalanceInStatus === 'boolean' ? parsed.showBalanceInStatus : false,
     }
   } catch {
     return { ...EMPTY_PREFS }
@@ -135,9 +139,9 @@ export function loadPrefs(): Prefs {
 export function savePrefs(
   prefs: Omit<
     Prefs,
-    'routingMode' | 'showPaidModels' | 'compareTargets' | 'autoRotate' | 'stickyModel' | 'viewMode'
+    'routingMode' | 'showPaidModels' | 'compareTargets' | 'autoRotate' | 'stickyModel' | 'viewMode' | 'showBalanceInStatus'
   > &
-    Partial<Pick<Prefs, 'routingMode' | 'showPaidModels' | 'compareTargets' | 'viewMode'>>
+    Partial<Pick<Prefs, 'routingMode' | 'showPaidModels' | 'compareTargets' | 'viewMode' | 'showBalanceInStatus'>>
 ): void {
   try {
     const current = loadPrefs()
@@ -152,6 +156,7 @@ export function savePrefs(
       showPaidModels: prefs.showPaidModels ?? current.showPaidModels,
       compareTargets: prefs.compareTargets ?? current.compareTargets,
       viewMode: prefs.viewMode ?? current.viewMode,
+      showBalanceInStatus: prefs.showBalanceInStatus ?? current.showBalanceInStatus,
       autoRotate: routingMode === 'auto',
       stickyModel: routingMode === 'failover',
     }

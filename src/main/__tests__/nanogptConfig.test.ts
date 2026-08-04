@@ -23,6 +23,7 @@ import {
   markBalanceBilled,
   nanogptEnv,
   readCache,
+  readCacheSync,
   refreshCatalogs,
   writeCache,
   type NanogptCache
@@ -120,14 +121,40 @@ describe('nanogptConfig', () => {
   })
 
   describe('readCache', () => {
+    it('returns the empty cache shape when the file is missing', async () => {
+      expect(await readCache()).toEqual({ version: 1, fetchedAt: 0, chat: [], image: [], balanceBilled: [] })
+    })
+
+    it('returns the empty cache and does not throw when the file is corrupt', async () => {
+      writeFileSync(cacheFilePath(), '{ not json', 'utf8')
+      await expect(readCache()).resolves.not.toThrow()
+      expect(await readCache()).toEqual({ version: 1, fetchedAt: 0, chat: [], image: [], balanceBilled: [] })
+    })
+
+    it('drops malformed model entries and keeps well-formed ones', async () => {
+      const raw = {
+        version: 1,
+        fetchedAt: 123,
+        chat: [{ id: '' }, { nope: 1 }, { id: 'ok' }],
+        image: [],
+        balanceBilled: []
+      }
+      writeFileSync(cacheFilePath(), JSON.stringify(raw), 'utf8')
+      const cache = await readCache()
+      expect(cache.chat).toHaveLength(1)
+      expect(cache.chat[0].id).toBe('ok')
+    })
+  })
+
+  describe('readCacheSync', () => {
     it('returns the empty cache shape when the file is missing', () => {
-      expect(readCache()).toEqual({ version: 1, fetchedAt: 0, chat: [], image: [], balanceBilled: [] })
+      expect(readCacheSync()).toEqual({ version: 1, fetchedAt: 0, chat: [], image: [], balanceBilled: [] })
     })
 
     it('returns the empty cache and does not throw when the file is corrupt', () => {
       writeFileSync(cacheFilePath(), '{ not json', 'utf8')
-      expect(() => readCache()).not.toThrow()
-      expect(readCache()).toEqual({ version: 1, fetchedAt: 0, chat: [], image: [], balanceBilled: [] })
+      expect(() => readCacheSync()).not.toThrow()
+      expect(readCacheSync()).toEqual({ version: 1, fetchedAt: 0, chat: [], image: [], balanceBilled: [] })
     })
 
     it('drops malformed model entries and keeps well-formed ones', () => {
@@ -139,14 +166,14 @@ describe('nanogptConfig', () => {
         balanceBilled: []
       }
       writeFileSync(cacheFilePath(), JSON.stringify(raw), 'utf8')
-      const cache = readCache()
+      const cache = readCacheSync()
       expect(cache.chat).toHaveLength(1)
       expect(cache.chat[0].id).toBe('ok')
     })
   })
 
   describe('writeCache / readCache round trip', () => {
-    it('round-trips a populated cache', () => {
+    it('round-trips a populated cache', async () => {
       const cache: NanogptCache = {
         version: 1,
         fetchedAt: 1700000000000,
@@ -154,24 +181,24 @@ describe('nanogptConfig', () => {
         image: [{ id: 'image-a', name: 'Image A' }],
         balanceBilled: ['image-a']
       }
-      writeCache(cache)
-      expect(readCache()).toEqual(cache)
+      await writeCache(cache)
+      expect(await readCache()).toEqual(cache)
     })
   })
 
   describe('balance-billed tracking', () => {
-    it('markBalanceBilled adds the id and is idempotent', () => {
-      markBalanceBilled('model-x')
-      expect(readCache().balanceBilled).toEqual(['model-x'])
+    it('markBalanceBilled adds the id and is idempotent', async () => {
+      await markBalanceBilled('model-x')
+      expect((await readCache()).balanceBilled).toEqual(['model-x'])
 
-      markBalanceBilled('model-x')
-      expect(readCache().balanceBilled).toEqual(['model-x'])
+      await markBalanceBilled('model-x')
+      expect((await readCache()).balanceBilled).toEqual(['model-x'])
     })
 
-    it('clearBalanceBilled removes the id', () => {
-      markBalanceBilled('model-x')
-      clearBalanceBilled('model-x')
-      expect(readCache().balanceBilled).toEqual([])
+    it('clearBalanceBilled removes the id', async () => {
+      await markBalanceBilled('model-x')
+      await clearBalanceBilled('model-x')
+      expect((await readCache()).balanceBilled).toEqual([])
     })
   })
 
@@ -184,8 +211,8 @@ describe('nanogptConfig', () => {
       expect(nanogptEnv(true)).toEqual({})
     })
 
-    it('returns an object whose only key is OPENCODE_CONFIG_CONTENT when the cache is populated', () => {
-      writeCache({ version: 1, fetchedAt: 1, chat: [{ id: 'model-a' }], image: [], balanceBilled: [] })
+    it('returns an object whose only key is OPENCODE_CONFIG_CONTENT when the cache is populated', async () => {
+      await writeCache({ version: 1, fetchedAt: 1, chat: [{ id: 'model-a' }], image: [], balanceBilled: [] })
       const env = nanogptEnv(true)
       expect(Object.keys(env)).toEqual(['OPENCODE_CONFIG_CONTENT'])
     })
@@ -204,7 +231,7 @@ describe('nanogptConfig', () => {
     })
 
     it('sets restartRequired false when re-fetching an identical id set', async () => {
-      writeCache({
+      await writeCache({
         version: 1,
         fetchedAt: 1,
         chat: [{ id: 'model-a' }, { id: 'model-b' }],
@@ -221,7 +248,7 @@ describe('nanogptConfig', () => {
     })
 
     it('flips restartRequired back to true when the id set changes', async () => {
-      writeCache({
+      await writeCache({
         version: 1,
         fetchedAt: 1,
         chat: [{ id: 'model-a' }, { id: 'model-b' }],
@@ -237,7 +264,7 @@ describe('nanogptConfig', () => {
     })
 
     it('preserves balanceBilled across a refresh', async () => {
-      writeCache({
+      await writeCache({
         version: 1,
         fetchedAt: 1,
         chat: [{ id: 'model-a' }],
@@ -249,7 +276,7 @@ describe('nanogptConfig', () => {
 
       await refreshCatalogs()
 
-      expect(readCache().balanceBilled).toEqual(['image-x'])
+      expect((await readCache()).balanceBilled).toEqual(['image-x'])
     })
 
     it('leaves the previously-written cache untouched when the fetch rejects', async () => {
@@ -260,13 +287,13 @@ describe('nanogptConfig', () => {
         image: [],
         balanceBilled: []
       }
-      writeCache(original)
+      await writeCache(original)
       vi.mocked(fetchSubscriptionModels).mockRejectedValueOnce(new Error('network down'))
       vi.mocked(fetchImageModels).mockResolvedValueOnce([])
 
       await expect(refreshCatalogs()).rejects.toThrow('network down')
 
-      expect(readCache()).toEqual(original)
+      expect(await readCache()).toEqual(original)
     })
   })
 })

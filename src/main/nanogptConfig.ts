@@ -25,8 +25,12 @@
  */
 import { app } from 'electron'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fetchImageModels, fetchSubscriptionModels, type NanoChatModel, type NanoImageModel } from './nanogpt'
+
+/** TTL for image model metadata cache (1 hour). */
+export const IMAGE_METADATA_TTL_MS = 1 * 60 * 60 * 1000
 
 /** Provider id used both in the generated config and by the renderer's picker/routing code. */
 export const NANOGPT_PROVIDER_ID = 'nanogpt'
@@ -75,7 +79,7 @@ function sanitizeModels<T extends { id: string }>(value: unknown): T[] {
 }
 
 /** Read the cache. A missing or corrupt file reads as empty and never throws (mirrors keys.ts). */
-export function readCache(): NanogptCache {
+export function readCacheSync(): NanogptCache {
   try {
     const path = cachePath()
     if (!existsSync(path)) return emptyCache()
@@ -97,29 +101,52 @@ export function readCache(): NanogptCache {
   }
 }
 
+export async function readCache(): Promise<NanogptCache> {
+  try {
+    const path = cachePath()
+    if (!existsSync(path)) return emptyCache()
+    const raw = await readFile(path, 'utf8')
+    const parsed = JSON.parse(raw) as unknown
+    if (!isRecord(parsed)) return emptyCache()
+    const fetchedAt =
+      typeof parsed.fetchedAt === 'number' && Number.isFinite(parsed.fetchedAt) ? parsed.fetchedAt : 0
+    return {
+      version: 1,
+      fetchedAt,
+      chat: sanitizeModels<NanoChatModel>(parsed.chat),
+      image: sanitizeModels<NanoImageModel>(parsed.image),
+      balanceBilled: Array.isArray(parsed.balanceBilled)
+        ? parsed.balanceBilled.filter((id): id is string => typeof id === 'string' && id.length > 0)
+        : []
+    }
+  } catch {
+    return emptyCache()
+  }
+}
+
 /** Write the cache pretty-printed. Contains no secrets, so no restrictive mode is needed. */
-export function writeCache(cache: NanogptCache): void {
-  writeFileSync(cachePath(), `${JSON.stringify(cache, null, 2)}\n`, 'utf8')
+export async function writeCache(cache: NanogptCache): Promise<void> {
+  await writeFile(cachePath(), `${JSON.stringify(cache, null, 2)}\n`, 'utf8')
 }
 
 /** Record that an image model billed the balance rather than the subscription. Idempotent. */
-export function markBalanceBilled(modelID: string): NanogptCache {
-  const cache = readCache()
+export async function markBalanceBilled(modelID: string): Promise<NanogptCache> {
+  const cache = await readCache()
   if (cache.balanceBilled.includes(modelID)) return cache
   const next: NanogptCache = { ...cache, balanceBilled: [...cache.balanceBilled, modelID] }
-  writeCache(next)
+  await writeCache(next)
   return next
 }
 
 /** Clear a model's balance-billed flag, e.g. after the user changes plan. */
-export function clearBalanceBilled(modelID: string): NanogptCache {
-  const cache = readCache()
+export async function clearBalanceBilled(modelID: string): Promise<NanogptCache> {
+  const cache = await readCache()
   if (!cache.balanceBilled.includes(modelID)) return cache
   const next: NanogptCache = {
     ...cache,
     balanceBilled: cache.balanceBilled.filter((id) => id !== modelID)
   }
-  writeCache(next)
+  await writeCache(next)
   return next
 }
 
@@ -183,7 +210,7 @@ export function buildConfigContent(chat: readonly NanoChatModel[]): string | nul
  */
 export function nanogptEnv(hasKey: boolean): Record<string, string> {
   if (!hasKey) return {}
-  const content = buildConfigContent(readCache().chat)
+  const content = buildConfigContent(readCacheSync().chat)
   if (content === null) return {}
   return { [CONFIG_ENV_VAR]: content }
 }
@@ -206,7 +233,7 @@ export type RefreshResult = {
  * Throws on network/auth failure; the caller decides whether that is fatal.
  */
 export async function refreshCatalogs(): Promise<RefreshResult> {
-  const previous = readCache()
+  const previous = await readCache()
   // Fetch both before writing: a failure leaves the existing cache untouched.
   const [chat, image] = await Promise.all([fetchSubscriptionModels(), fetchImageModels()])
 
@@ -216,6 +243,6 @@ export async function refreshCatalogs(): Promise<RefreshResult> {
     before.size !== after.size || [...after].some((id) => !before.has(id))
 
   const fetchedAt = Date.now()
-  writeCache({ version: 1, fetchedAt, chat, image, balanceBilled: previous.balanceBilled })
+  await writeCache({ version: 1, fetchedAt, chat, image, balanceBilled: previous.balanceBilled })
   return { chatCount: chat.length, imageCount: image.length, restartRequired, fetchedAt }
 }

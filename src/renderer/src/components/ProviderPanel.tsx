@@ -140,12 +140,14 @@ function NanogptCatalogRow({ onRestart }: { onRestart: () => Promise<void> }): J
 
   const empty = chatCount === 0 || chatCount === null
 
+  const isStale = fetchedAt > 0 && Date.now() - fetchedAt > 6 * 60 * 60 * 1000
+
   return (
     <div className="providers__key-set">
-      <span className="providers__key-masked">
+      <span className="providers__key-masked" style={isStale ? { color: 'var(--warn, #f59e0b)' } : undefined}>
         {empty
           ? 'No subscription models loaded yet'
-          : `${chatCount} chat · ${imageCount ?? 0} image models · fetched ${relativeTime(fetchedAt)}`}
+          : `${chatCount} chat · ${imageCount ?? 0} image models · fetched ${relativeTime(fetchedAt)}${isStale ? ' ⚠️ (>6h old)' : ''}`}
       </span>
       <div className="providers__key-actions">
         <button

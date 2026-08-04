@@ -6,9 +6,8 @@
  * without ever double-fetching: the agent editing several files in quick succession
  * collapses into a single status/branches round-trip ~300ms after the last edit.
  *
- * NOTE on `stageHunks`: it depends on `selectedHunksToPatch` from
- * src/renderer/src/lib/hunks.ts (not yet written — owned by a concurrent workstream).
- * Stubbed below — see TODO(hunks).
+ * NOTE on `stageHunks`: converts selected hunks to a patch using
+ * selectedHunksToPatch from hunks.ts and stages it via the git API.
  */
 
 import { api, errText } from './api'

@@ -29,7 +29,10 @@ import type {
   FileDiff,
   GitStatus,
   GitBranch,
-  TermId
+  TermId,
+  NanoUsage,
+  NanoBalance,
+  WeeklyTokenData
 } from '../types'
 
 export interface AppState {
@@ -80,6 +83,15 @@ export interface AppState {
   updateStatus: UpdateStatus
   theme: Theme
   activeArtifactID: string | null
+
+  /* ---- NanoGPT Subscription Quota & Balance ---- */
+  nanoUsage: NanoUsage | null
+  nanoBalance: NanoBalance | null
+  nanoWeeklyUsage: WeeklyTokenData | null
+  showBalanceInStatus: boolean
+  /** Resolves true when usage/weekly/balance all came back with usable (non-null) data. */
+  fetchNanoQuota(): Promise<boolean>
+  setShowBalanceInStatus(show: boolean): void
 
   /* ---- multi-model fan-out (compare runs) ---- */
   /** The active compare run, or null. While non-null, Chat renders CompareView. */

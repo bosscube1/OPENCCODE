@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { JSX } from 'react'
 import type { NanoUsage, PermissionConfig, UpdateStatus } from '../lib/types'
+import { WEEKLY_INPUT_TOKEN_CAP } from '../lib/types'
 import { useStore, errText } from '../lib/store'
 import { FREE_ROUTING_CANDIDATES } from '../lib/rotation'
 import { formatTokens, relativeTime } from '../lib/format'
@@ -17,68 +18,102 @@ function toEpochMs(epoch: number): number {
   return epoch < 1e12 ? epoch * 1000 : epoch
 }
 
-/** Subscription quota readout. Fetches once on mount and on manual refresh — never polled. */
+/** Subscription quota readout and token accumulator progress. */
 function NanoUsageCard(): JSX.Element {
-  const [usage, setUsage] = useState<NanoUsage | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const usage = useStore((s) => s.nanoUsage)
+  const balance = useStore((s) => s.nanoBalance)
+  const weeklyUsage = useStore((s) => s.nanoWeeklyUsage)
+  const showBalanceInStatus = useStore((s) => s.showBalanceInStatus)
+  const setShowBalanceInStatus = useStore((s) => s.setShowBalanceInStatus)
+  const fetchNanoQuota = useStore((s) => s.fetchNanoQuota)
 
-  const load = useCallback((): void => {
+  const [loading, setLoading] = useState(false)
+
+  const handleRefresh = async () => {
     setLoading(true)
-    setError(null)
-    window.api.nanogpt
-      .usage()
-      .then((result) => setUsage(result))
-      .catch((e: unknown) => {
-        setUsage(null)
-        setError(errText(e))
-      })
-      .finally(() => setLoading(false))
-  }, [])
-
-  useEffect(() => {
-    load()
-  }, [load])
-
-  const noKey = error !== null && error.includes('No NanoGPT API key')
+    try {
+      await fetchNanoQuota()
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const bucket = (label: string, b: NanoUsage['daily']): JSX.Element => (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-      <span style={{ fontSize: '12px', fontWeight: 600 }}>{label}</span>
-      <span style={{ fontSize: '12px' }}>
+    <div className="providers__nano-bucket">
+      <span className="providers__nano-bucket-label">{label}</span>
+      <span className="providers__nano-bucket-value">
         {formatTokens(b.used)} used · {formatTokens(b.remaining)} left · {Math.round(b.percentUsed)}%
       </span>
-      <span style={{ fontSize: '11px', color: 'var(--fg-dim)' }}>resets {relativeTime(toEpochMs(b.resetAt))}</span>
+      <span className="providers__nano-bucket-reset">resets {relativeTime(toEpochMs(b.resetAt))}</span>
     </div>
   )
 
+  // Contract T3: the documented cap is 60M INPUT tokens/week, not total — the gauge must compare
+  // inputTokens, never totalTokens.
+  const weeklyPct = weeklyUsage
+    ? Math.min(100, Math.round((weeklyUsage.inputTokens / WEEKLY_INPUT_TOKEN_CAP) * 100))
+    : 0
+  const gaugeFillClass =
+    weeklyPct >= 95
+      ? 'providers__nano-gauge-fill providers__nano-gauge-fill--danger'
+      : weeklyPct >= 80
+        ? 'providers__nano-gauge-fill providers__nano-gauge-fill--warn'
+        : 'providers__nano-gauge-fill'
+
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-        <span className="providers__name" style={{ fontSize: '12px' }}>Subscription quota</span>
+    <div className="providers__nano">
+      <div className="providers__nano-head">
+        <span className="providers__name providers__name--sm">Subscription quota & Weekly Usage</span>
         <button
           type="button"
           className="providers__key-btn"
           disabled={loading}
-          onClick={load}
+          onClick={handleRefresh}
         >
           {loading ? 'Loading…' : 'Refresh'}
         </button>
       </div>
-      {loading && usage === null ? (
-        <p style={{ fontSize: '12px', color: 'var(--fg-dim)', margin: 0 }}>Loading usage…</p>
-      ) : noKey ? (
-        <p style={{ fontSize: '12px', color: 'var(--fg-dim)', margin: 0 }}>
-          Add a NanoGPT key under Provider Keys to see usage.
-        </p>
-      ) : error !== null ? (
-        <p role="alert" style={{ fontSize: '12px', color: 'var(--danger)', margin: 0 }}>{error}</p>
-      ) : usage !== null ? (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+
+      {usage !== null ? (
+        <div className="providers__nano-buckets">
           {bucket('Daily', usage.daily)}
           {bucket('Monthly', usage.monthly)}
         </div>
-      ) : null}
+      ) : (
+        <p className="providers__nano-empty">No NanoGPT subscription data loaded yet.</p>
+      )}
+
+      {weeklyUsage && (
+        <div className="providers__nano-gauge">
+          <div className="providers__nano-gauge-row">
+            <span>Weekly Input-Token Budget ({weeklyUsage.weekKey})</span>
+            <span>
+              {formatTokens(weeklyUsage.inputTokens)} / {formatTokens(WEEKLY_INPUT_TOKEN_CAP)} ({weeklyPct}%)
+            </span>
+          </div>
+          <div className="providers__nano-gauge-track">
+            <div className={gaugeFillClass} style={{ width: `${weeklyPct}%` }} />
+          </div>
+          <div className="providers__nano-gauge-row">
+            <span>Output tokens this week (not counted against the cap)</span>
+            <span>{formatTokens(weeklyUsage.outputTokens)}</span>
+          </div>
+        </div>
+      )}
+
+      {balance && (
+        <div className="providers__nano-balance">
+          <span>Pay-per-prompt balance: <strong>${balance.usd.toFixed(2)}</strong></span>
+          <label className="providers__nano-balance-toggle">
+            <input
+              type="checkbox"
+              checked={showBalanceInStatus}
+              onChange={(e) => setShowBalanceInStatus(e.target.checked)}
+            />
+            <span>Show in status bar</span>
+          </label>
+        </div>
+      )}
     </div>
   )
 }

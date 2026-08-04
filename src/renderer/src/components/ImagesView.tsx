@@ -7,6 +7,7 @@ import type {
   NanogptGenerateResult,
   NanogptModelsResult
 } from '../lib/types'
+import { DAILY_FREE_IMAGE_CAP } from '../lib/types'
 import { useStore } from '../lib/store'
 import { canGenerateWith, label, pickDefaultImageModel, sortImageModels } from '../lib/imageModels'
 import { relativeTime } from '../lib/format'
@@ -38,6 +39,33 @@ function billingLabel(b: ImageBilling): string {
 
 function errMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
+}
+
+/**
+ * Documented machine-readable error codes (contract T6) worth a specific message. `err.code`
+ * rarely survives the IPC boundary (Electron's `ipcMain.handle` rejection does not preserve
+ * custom Error properties), so this also falls back to matching the code token inside the raw
+ * message text — main includes the raw JSON error body snippet in the thrown message, so the
+ * code string is present there even when the property is gone.
+ */
+const DOCUMENTED_GENERATE_ERRORS: Record<string, string> = {
+  content_policy_violation:
+    'NanoGPT rejected this prompt for its content policy. Not billed — try a different prompt.',
+  daily_rpd_limit_exceeded:
+    'Daily request limit reached on your NanoGPT plan. Try again after it resets.',
+  daily_usd_limit_exceeded:
+    'Daily spend limit reached on your NanoGPT plan. Try again after it resets.',
+  insufficient_balance:
+    'Your NanoGPT pay-per-prompt balance is too low to cover this request.'
+}
+
+function describeGenerateError(e: unknown): string {
+  const raw = errMessage(e)
+  const codeProp = typeof (e as { code?: unknown })?.code === 'string' ? (e as { code: string }).code : undefined
+  const matched =
+    (codeProp && codeProp in DOCUMENTED_GENERATE_ERRORS ? codeProp : undefined) ??
+    Object.keys(DOCUMENTED_GENERATE_ERRORS).find((code) => raw.includes(code))
+  return matched ? DOCUMENTED_GENERATE_ERRORS[matched] : raw
 }
 
 /**
@@ -208,6 +236,7 @@ export function ImagesView(): JSX.Element {
   const [gallery, setGallery] = useState<GeneratedImageMeta[]>([])
   const [galleryLoading, setGalleryLoading] = useState(true)
   const [galleryError, setGalleryError] = useState<string | null>(null)
+  const [todayCount, setTodayCount] = useState<number | null>(null)
 
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null)
 
@@ -228,8 +257,12 @@ export function ImagesView(): JSX.Element {
     setGalleryLoading(true)
     setGalleryError(null)
     try {
-      const metas = await window.api.nanogpt.images.list()
+      const [metas, today] = await Promise.all([
+        window.api.nanogpt.images.list(),
+        window.api.nanogpt.images.today()
+      ])
       setGallery([...metas].sort((a, b) => b.createdAt - a.createdAt))
+      setTodayCount(today)
     } catch (e) {
       setGalleryError(errMessage(e))
     } finally {
@@ -278,7 +311,7 @@ export function ImagesView(): JSX.Element {
       }
       if (result.blacklisted) void loadCatalogue()
     } catch (e) {
-      setGenerateError(errMessage(e))
+      setGenerateError(describeGenerateError(e))
     } finally {
       setGenerating(false)
     }
@@ -431,7 +464,14 @@ export function ImagesView(): JSX.Element {
 
       <div className="images__gallery-head">
         <h2>Gallery</h2>
-        {galleryLoading && <span>Loading…</span>}
+        <div className="images__gallery-count">
+          {todayCount !== null && (
+            <span title="Counted from this device's local image index — not the NanoGPT account.">
+              {todayCount}/{DAILY_FREE_IMAGE_CAP} generated today (this device)
+            </span>
+          )}
+          {galleryLoading && <span className="images__gallery-loading">Loading…</span>}
+        </div>
       </div>
 
       {galleryError && (

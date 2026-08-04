@@ -1266,6 +1266,10 @@ body.app--resizing {
   text-decoration: underline;
 }
 
+.providers__name--sm {
+  font-size: 12px;
+}
+
 .providers__ext {
   font-size: 9.5px;
   color: var(--fg-dim);
@@ -1561,6 +1565,101 @@ body.app--resizing {
 }
 
 /* --------------------------------------------------------------------------
+   NanoGPT usage card (inside .providers panel — SettingsPanel)
+   -------------------------------------------------------------------------- */
+
+.providers__nano {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.providers__nano-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.providers__nano-buckets {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.providers__nano-bucket {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.providers__nano-bucket-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.providers__nano-bucket-value {
+  font-size: 12px;
+}
+
+.providers__nano-bucket-reset {
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+.providers__nano-empty {
+  font-size: 12px;
+  color: var(--fg-dim);
+  margin: 0;
+}
+
+.providers__nano-gauge {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.providers__nano-gauge-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.providers__nano-gauge-track {
+  height: 6px;
+  background: var(--bg-subtle, #333);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.providers__nano-gauge-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.providers__nano-gauge-fill--warn {
+  background: var(--warn);
+}
+
+.providers__nano-gauge-fill--danger {
+  background: var(--danger);
+}
+
+.providers__nano-balance {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.providers__nano-balance-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+/* --------------------------------------------------------------------------
    Banner
    -------------------------------------------------------------------------- */
 
@@ -1741,6 +1840,17 @@ body.app--resizing {
 .app__pending {
   color: var(--warn);
   font-weight: 600;
+}
+
+/* Failover chip — shows the pinned model was swapped for a healthy one, click to revert. */
+.app__status-failover {
+  background: var(--warn);
+  color: white;
+  border: none;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
 }
 
 /* --------------------------------------------------------------------------

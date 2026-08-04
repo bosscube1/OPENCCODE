@@ -37,13 +37,17 @@ import type { AppSettingsController, AppSettingsResult } from './appSettings'
 import type { LiveWindowController } from './liveWindow'
 import { sendGeminiLive, startGeminiLive, stopGeminiLive, type GeminiLiveInput } from './geminiLive'
 import { saveLiveTranscript, revealTranscriptsFolder } from './liveTranscripts'
-import { markBalanceBilled, readCache, refreshCatalogs, type RefreshResult } from './nanogptConfig'
+import { nanogptLimiter } from './nanogptLimiter'
+import { markBalanceBilled, readCache, readCacheSync, refreshCatalogs, type RefreshResult } from './nanogptConfig'
+import { tokenBudgetTracker, type WeeklyTokenData } from './tokenBudgetTracker'
 import {
   fetchSubscriptionUsage,
   generateImage,
+  fetchBalance,
   type NanoChatModel,
   type NanoImageModel,
-  type NanoUsage
+  type NanoUsage,
+  type NanoBalance
 } from './nanogpt'
 import {
   deleteImage,
@@ -51,6 +55,7 @@ import {
   readImage,
   reconcile,
   saveImage,
+  imagesToday,
   type GeneratedImageMeta
 } from './nanogptImages'
 import { classifyBilling, type ImageBilling } from './nanogptBilling'
@@ -151,10 +156,13 @@ const CHANNELS = [
   'oc:nanogpt:models',
   'oc:nanogpt:refresh',
   'oc:nanogpt:usage',
+  'oc:nanogpt:balance',
+  'oc:nanogpt:weeklyUsage',
   'oc:nanogpt:generate',
   'oc:nanogpt:images:list',
   'oc:nanogpt:images:read',
   'oc:nanogpt:images:delete',
+  'oc:nanogpt:images:today',
   'oc:fs:tree',
   'oc:fs:read',
   'oc:fs:write',
@@ -1077,7 +1085,7 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
   /* ---------------------------------------------------------------- */
 
   ipcMain.handle('oc:nanogpt:models', (): NanogptModelsResult => {
-    const cache = readCache()
+    const cache = readCacheSync()
     return {
       chat: cache.chat,
       image: cache.image,
@@ -1086,9 +1094,45 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
     }
   })
 
-  ipcMain.handle('oc:nanogpt:refresh', (): Promise<RefreshResult> => refreshCatalogs())
+  ipcMain.handle('oc:nanogpt:refresh', async (): Promise<RefreshResult> => {
+    // refreshCatalogs() fans out to both the chat and image catalog endpoints internally
+    // (nanogptConfig.ts, owned by M1/M3 — not edited here); this is the only call site available
+    // to gate that fan-out behind the account-wide limiter per contract T4 (D6).
+    const releaseLimiter = await nanogptLimiter.acquireSlot()
+    try {
+      return await refreshCatalogs()
+    } finally {
+      releaseLimiter()
+    }
+  })
 
-  ipcMain.handle('oc:nanogpt:usage', (): Promise<NanoUsage> => fetchSubscriptionUsage())
+  ipcMain.handle('oc:nanogpt:usage', async (): Promise<NanoUsage | null> => {
+    const releaseLimiter = await nanogptLimiter.acquireSlot()
+    try {
+      return await fetchSubscriptionUsage()
+    } catch {
+      // Per contract T2: null means "unknown", never a zero-valued placeholder — the UI must be
+      // able to tell "usage unknown" apart from a genuinely empty account.
+      return null
+    } finally {
+      releaseLimiter()
+    }
+  })
+
+  ipcMain.handle('oc:nanogpt:balance', async (): Promise<NanoBalance | null> => {
+    const releaseLimiter = await nanogptLimiter.acquireSlot()
+    try {
+      return await fetchBalance()
+    } catch {
+      // Per contract T2 / defect D5: null means "unknown", never { balance: 0 } — a $0.00 wallet
+      // and a failed fetch are different states and the Settings card must distinguish them.
+      return null
+    } finally {
+      releaseLimiter()
+    }
+  })
+
+  ipcMain.handle('oc:nanogpt:weeklyUsage', (): WeeklyTokenData => tokenBudgetTracker.getWeeklyTokens())
 
   /**
    * Generate one or more images. This handler SPENDS MONEY, so every argument is validated against
@@ -1104,7 +1148,7 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
     }
 
     const model = requireString(args.model, 'model')
-    const cache = readCache()
+    const cache = await readCache()
     if (!cache.image.some((entry) => entry.id === model)) {
       throw new Error(
         `Unknown image model "${model}". Refresh the NanoGPT model list under Providers first.`
@@ -1152,9 +1196,11 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
     generationsInFlight.add(model)
 
     let result: Awaited<ReturnType<typeof generateImage>>
+    const releaseLimiter = await nanogptLimiter.acquireSlot()
     try {
       result = await generateImage({ model, prompt, n: count, ...(size ? { size } : {}) })
     } finally {
+      releaseLimiter()
       generationsInFlight.delete(model)
     }
 
@@ -1164,13 +1210,17 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
     // long. Only the blacklist bookkeeping depends on it, but a stale read here would return a wrong
     // `blacklisted` flag to the UI.
     let blacklisted = false
-    if (billing === 'balance' && !readCache().balanceBilled.includes(model)) {
-      markBalanceBilled(model)
+    if (billing === 'balance' && !(await readCache()).balanceBilled.includes(model)) {
+      await markBalanceBilled(model)
       blacklisted = true
     }
 
-    const images = result.images.map((image) => ({
-      meta: saveImage({
+    // Sequential, not Promise.all: nanogptImages.saveImage() now serializes its own index.json
+    // mutations internally (D1's withIndexLock), so concurrent calls are safe either way, but a
+    // plain loop here is cheaper to reason about and avoids relying on that internal lock alone.
+    const images: Array<{ meta: GeneratedImageMeta; base64: string }> = []
+    for (const image of result.images) {
+      const meta = await saveImage({
         base64: image.b64,
         sessionID,
         prompt,
@@ -1178,9 +1228,9 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
         ...(size ? { size } : {}),
         ...(result.paymentSource !== undefined ? { paymentSource: result.paymentSource } : {}),
         ...(result.cost !== undefined ? { cost: result.cost } : {})
-      }),
-      base64: image.b64
-    }))
+      })
+      images.push({ meta, base64: image.b64 })
+    }
 
     return {
       images,
@@ -1193,20 +1243,22 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
     }
   })
 
-  ipcMain.handle('oc:nanogpt:images:list', (_event, sessionArg: unknown): GeneratedImageMeta[] => {
+  ipcMain.handle('oc:nanogpt:images:list', async (_event, sessionArg: unknown): Promise<GeneratedImageMeta[]> => {
     // Drop entries whose file vanished so the gallery never renders a broken tile.
-    reconcile()
+    await reconcile()
     const sessionID = optionalString(sessionArg)
-    return sessionID === undefined ? listImages() : listImages(sessionID)
+    return sessionID === undefined ? await listImages() : await listImages(sessionID)
   })
 
-  ipcMain.handle('oc:nanogpt:images:read', (_event, idArg: unknown): string | null =>
-    readImage(requireString(idArg, 'id'))
+  ipcMain.handle('oc:nanogpt:images:read', async (_event, idArg: unknown): Promise<string | null> =>
+    await readImage(requireString(idArg, 'id'))
   )
 
-  ipcMain.handle('oc:nanogpt:images:delete', (_event, idArg: unknown): void =>
-    deleteImage(requireString(idArg, 'id'))
+  ipcMain.handle('oc:nanogpt:images:delete', async (_event, idArg: unknown): Promise<void> =>
+    await deleteImage(requireString(idArg, 'id'))
   )
+
+  ipcMain.handle('oc:nanogpt:images:today', async (): Promise<number> => await imagesToday())
 
   ipcMain.handle('oc:live:start', (event, config: unknown): Promise<void> => startGeminiLive(event.sender, config))
   ipcMain.handle('oc:live:stop', (event): void => stopGeminiLive(event.sender.id))

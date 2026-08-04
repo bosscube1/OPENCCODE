@@ -27,6 +27,8 @@ import type {
   NanogptModelsResult,
   NanogptRefreshResult,
   NanoUsage,
+  NanoBalance,
+  WeeklyTokenData,
   FileNode,
   FileContent,
   FileDiff,
@@ -73,12 +75,15 @@ export interface OpencodeApi {
   nanogpt: {
     models(): Promise<NanogptModelsResult>
     refresh(): Promise<NanogptRefreshResult>
-    usage(): Promise<NanoUsage>
+    usage(): Promise<NanoUsage | null>
+    balance(): Promise<NanoBalance | null>
+    weeklyUsage(): Promise<WeeklyTokenData>
     generate(a: NanogptGenerateArgs): Promise<NanogptGenerateResult>
     images: {
       list(sessionID?: string): Promise<GeneratedImageMeta[]>
       read(id: string): Promise<string | null>
       remove(id: string): Promise<void>
+      today(): Promise<number>
     }
   }
   messages(directory: string, sessionID: string): Promise<MessageWithParts[]>
