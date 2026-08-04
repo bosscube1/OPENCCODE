@@ -2,10 +2,8 @@
  * Single-file review/edit surface (Phase 1 code surface). This is a review surface,
  * not an IDE: one open file, its working-tree diff, and hunk-level accept/reject.
  *
- * NOTE on `applyAcceptedHunks`: it depends on the pure `src/renderer/src/lib/hunks.ts`
- * module (`parseUnifiedDiff` / `applyHunksToText`), which is being written concurrently
- * by another workstream and does not exist yet. Rather than import a module that would
- * break typecheck for everyone, the action is stubbed below — see TODO(hunks).
+ * NOTE on `applyAcceptedHunks`: applies selected hunks via applyHunksToText,
+ * saves the result to disk, and refreshes the editor and git state.
  */
 
 import { api, errText } from './api'
