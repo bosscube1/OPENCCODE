@@ -12,4 +12,4 @@ and an entry here.
 | [0004](0004-windows-first.md) | Windows-first: `.cmd` spawn, `taskkill /T /F`, DPAPI; POSIX kept compiling in CI but not verified | Accepted |
 
 Related: `CONTRACTS.md` (binding interface spec), `AGENTS.md` (architecture
-invariants), `CONTINUATION.md` (session handoffs).
+invariants), `docs/history/CONTINUATION.md` (session handoffs).

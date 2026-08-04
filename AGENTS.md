@@ -72,7 +72,7 @@ tsconfig.node.json      main + preload + electron.vite.config.ts
 tsconfig.web.json       renderer (with @renderer/* path alias)
 eslint.config.js        flat ESLint config
 CONTRACTS.md            binding IPC/SDK/security contract — read before touching IPC
-CONTINUATION.md, HANDOFF_GEMINI.md, PRODUCTION_PLAN.md   historical agent handoffs
+docs/history/CONTINUATION.md, docs/history/HANDOFF_GEMINI.md, docs/history/PRODUCTION_PLAN.md   historical agent handoffs
 ```
 
 Generated/packaged output (`out/`, `dist/`, `dist-*/`, `release/`) is gitignored — never
