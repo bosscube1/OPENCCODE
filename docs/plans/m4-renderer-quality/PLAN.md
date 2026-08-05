@@ -58,7 +58,7 @@ three.
       Its reported audit tally ("1 PASS" listing two components) is not consistent with
       the file; the file's own per-criterion marks are 31 PASS / 8 FAIL / 9 UNKNOWN /
       2 PARTIAL. Treat the file as the record, not the summary.
-- [ ] Lane B — 4.6. **Cache logic is correct and verified**: `harnessPromptFields`
+- [x] Lane B — 4.6, after one rework round. **Cache logic is correct and verified**: `harnessPromptFields`
       re-reads `get()` for both agent and readOnly on every call and compares all three
       cache-key parts before returning a hit, so there is no stale-prompt path.
       **Its tests were worthless** — `harnessPromptFields` is module-private
