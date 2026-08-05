@@ -30,6 +30,14 @@ jobs:
 
       - run: npm ci
 
+      # Roadmap M8.2: fail the build on any high- or critical-severity advisory,
+      # so a newly-published one is caught at PR time rather than at release
+      # time. Moderate and low findings still print in the log but do not block —
+      # the tree currently carries one, dompurify via monaco-editor, whose only
+      # offered "fix" is a downgrade to monaco 0.53.0. Lives in the check job
+      # rather than its own so it reuses the npm ci above.
+      - run: npm audit --audit-level=high
+
       - run: npm run typecheck
 
       - run: npm run lint
