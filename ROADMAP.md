@@ -71,8 +71,10 @@ The gap between "it builds" and "a stranger can install it".
 | 1.4 | CI packaging job: run `dist:win:dir` on windows-latest per PR so packaging breaks are caught at PR time, not release time. | `.github/workflows/ci.yml` |
 | 1.5 | Ship a crash-report surface — `crashlog.ts` writes but nothing reads it back to the user. | `crashlog.ts`, `SettingsPanel.tsx` |
 
-**Exit:** a signed 0.7.0 installer on a clean VM installs, launches, and
-auto-updates to 0.7.1 without a manual download.
+**Exit:** a **signed** installer on a clean VM installs, launches, and auto-updates to
+the next patch release without a manual download. The unsigned half of this was proven
+on 2026-08-05 (0.7.0 → 1.0.2, see 1.2); only the signing requirement is outstanding,
+blocked on 1.1.
 
 ---
 
@@ -85,7 +87,7 @@ refactoring `ipc.ts` at 5.8% branch coverage is how a working app breaks.
 |---|---|---|
 | 2.1 | Playwright + `@playwright/test` against the built Electron app. 8–12 smoke scenarios: launch, create session, send prompt (mock provider), open file, edit + save, git status, terminal spawn, quit-with-no-orphans. | new `e2e/` |
 | 2.2 | Component tests via React Testing Library on the five densest components: `CommandPalette`, `Composer`, `MessageView`, `ToolCall`, `ChangesPanel`. | `src/renderer/src/components/__tests__/` |
-| 2.3 | IPC-boundary integration tests — drive real handlers through a stub `ipcMain`, assert validation rejects malformed input on all 81 channels. Directly attacks the 5.8% branch number. | `src/main/__tests__/ipc.*.test.ts` |
+| 2.3 | ~~IPC-boundary integration tests.~~ **DONE 2026-08-05** — all 71 registered channels driven through a stub `ipcMain` by 290 tests in 7 files. `ipc.ts` 5.76% → 74.89% branch, 21.27% → 90.9% statements. Harness `ipcHarness.ts`; findings in `docs/plans/m2.3-ipc-boundary/SPEC.md`. | `src/main/__tests__/ipc.*.test.ts` |
 | 2.4 | Cover the zero-coverage lifecycle files: `server.ts` spawn/probe/reap (incl. the Windows `taskkill /T /F` path at `server.ts:197`), `tray.ts`, `menu.ts`, `quickEntry.ts`. | `src/main/__tests__/` |
 | 2.5 | Slice coverage for the <20% offenders: `eventSlice` (0.43%), `compareSlice` (0.68%), `routingSlice` (2.08%), `uiSlice` (3.44%), `projectsSlice` (4%), `imagesSlice` (6.89%), `sessionSlice` (17.58%). | `lib/__tests__/` |
 | 2.6 | CI coverage gate at 65%, ratcheting. | `vitest.config.ts`, `ci.yml` |

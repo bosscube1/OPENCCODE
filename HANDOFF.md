@@ -152,16 +152,24 @@ is the proven route. Note the image-model discovery endpoints (`/api/v1/image-mo
 
 ### 5c. Quality, highest value first
 
-10. **M2.3 — IPC-boundary tests.** Biggest remaining hole: 84 invoke channels, 59.66% branch
-    coverage, and `ipc.ts` is the whole attack surface. Drive real handlers through a stub
-    `ipcMain`; assert every channel rejects malformed input.
+10. **M2.3 — IPC-boundary tests. DONE 2026-08-05.** All 71 registered channels covered by
+    290 tests across 7 files. `ipc.ts` went 5.76% → **74.89% branch**, 21.27% → 90.9%
+    statements; repo-wide 59.66% → 63.07% branch, 62.69% → **68.07% statements**.
+    Harness: `src/main/__tests__/ipcHarness.ts` (stub `ipcMain`, all 20 collaborators
+    mocked via `vi.doMock` + dynamic import — top-level `vi.mock` will not hoist across
+    files, so reuse `loadIpc()` rather than rolling your own). Findings and the
+    channel-diff caveat live in `docs/plans/m2.3-ipc-boundary/SPEC.md`.
+    One open finding: MCP handlers validate `args.directory` but pass `args.name` /
+    `args.config` to the service layer unvalidated (`ipc.ts:777-805`). Current behaviour
+    is pinned by tests; the fix is owed.
 11. **M2.4 — main files with no tests at all:** `index.ts`, `server.ts`, `tray.ts`,
     `menu.ts`, `quickEntry.ts`, `liveWindow.ts`. (`updater`, `crashlog`, `nanogptLimiter`,
     `tokenBudgetTracker` now have tests.)
 12. **M2.1 — Playwright E2E.** `e2e/` does not exist.
 13. **M2.2 — component tests.** `components/__tests__/` does not exist.
-14. **M2.6 — coverage gate at 60%** (just under the current 62.69% so it cannot flake), then
-    ratchet. Do **not** set 65% yet — statements are below it.
+14. **M2.6 — coverage gate.** Statements are now **68.07%** and branches 63.07% (M2.3 moved
+    both), so a 65% statements / 60% branches gate is safe and no longer flaky. The old
+    "do not set 65% yet" note is obsolete.
 15. **M4.1 — keyboard collision.** `MentionMenu.tsx:66` still registers a global
     capture-phase `keydown` racing `Chat.tsx` and `Composer.tsx`. Real bug, cheap fix, needs
     a regression test.
