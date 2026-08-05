@@ -1,3 +1,6 @@
+import { readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => {
@@ -58,6 +61,7 @@ describe('updater', () => {
     mocks.showMessageBox.mockResolvedValue({ response: 1, checkboxChecked: false })
     delete process.env.PORTABLE_EXECUTABLE_FILE
     delete process.env.PORTABLE_EXECUTABLE_DIR
+    delete process.env.OPENCODE_UPDATER_LOG
   })
 
   it('configures automatic downloads but never automatic installation', () => {
@@ -68,6 +72,30 @@ describe('updater', () => {
     expect(mocks.updater.autoInstallOnAppQuit).toBe(false)
     expect(mocks.updater.logger).toBeNull()
     expect(statuses).toEqual([{ state: 'idle' }])
+  })
+
+  it('attaches an updater logger only when OPENCODE_UPDATER_LOG names a path', () => {
+    const logFile = join(tmpdir(), `updater-log-test-${process.pid}.log`)
+    rmSync(logFile, { force: true })
+    process.env.OPENCODE_UPDATER_LOG = logFile
+
+    setupUpdater(() => {})
+    const logger = mocks.updater.logger as { info: (m: string) => void } | null
+    expect(logger).not.toBeNull()
+
+    // The differential-download evidence is written through this logger, so prove it
+    // actually reaches disk rather than merely being a non-null object.
+    logger?.info('Differential download: probe')
+    expect(readFileSync(logFile, 'utf8')).toContain('Differential download: probe')
+
+    rmSync(logFile, { force: true })
+  })
+
+  it('keeps the updater silent when the log path is unwritable', () => {
+    // A broken log must degrade to no logging, never break the update itself.
+    process.env.OPENCODE_UPDATER_LOG = join(tmpdir(), 'updater-log-test.log', 'nested.log')
+    expect(() => setupUpdater(() => {})).not.toThrow()
+    expect(mocks.updater.autoDownload).toBe(true)
   })
 
   it('does not invoke electron-updater in development or portable builds', async () => {

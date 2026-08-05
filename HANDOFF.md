@@ -152,11 +152,14 @@ is the proven route. Note the image-model discovery endpoints (`/api/v1/image-mo
    Standing caveat: `updater.ts` sets no `publisherName` and builds are unsigned, so
    electron-updater *skips* signature verification rather than failing. Integrity rests
    only on the `sha512` in `latest.yml` — which verified on both runs.
-   **Still open, one line of work:** the blockmap differential download has never been
-   proven, and cannot be with the current code — `src/main/updater.ts:99` sets
-   `autoUpdater.logger = null`, so the decision is never recorded, and a staged delta is
-   indistinguishable from a full download by file size. Assign a real logger there
-   temporarily and re-run a patch hop to settle it.
+   **Blockmap differential download: PROVEN 2026-08-05.** 30 changed blocks, 619 KB
+   transferred against a 127,803 KB artifact (0.48%), reconstructed byte-exact. Evidence
+   in `docs/RELEASE_VERIFICATION.md` § "Differential download — proven". Both GitHub hops
+   fetched full because the delta base (`<updater-cache>/installer.exe`) is written by the
+   NSIS installer, and the cache was empty on the first hop.
+   `src/main/updater.ts` now carries an opt-in file logger — set `OPENCODE_UPDATER_LOG` to
+   a path to capture updater diagnostics; it stays off otherwise because the lines contain
+   update URLs and local paths.
 8. **M1.1 — code signing.** Blocked on buying an OV/EV cert or Azure Trusted Signing, not a
    code problem. Until then SmartScreen warns every first-time user.
 9. **M8.4 — Dependabot/Renovate**, grouped weekly. Small; the audit gate already catches what
@@ -322,16 +325,13 @@ Confirm the tree is clean. M1.2 (updater round-trip), M2.3 (IPC-boundary tests),
 
 Unblocked work, in order:
 
-1. **Prove or disprove the blockmap differential download** (§5b item 7) — the one
-   remaining untested updater path. Temporarily set `autoUpdater.logger` in
-   `src/main/updater.ts:99`, cut a throwaway patch release, re-run the hop, read the log.
-2. **Finish M2.5.** Remaining low-coverage slices, worst first:
+1. **Finish M2.5.** Remaining low-coverage slices, worst first:
    `compareSlice.ts` 4.08%, `imagesSlice.ts` 10.34%, `slices/api.ts` 53.84%,
    `gitSlice.ts` 59.32%. Ratchet the `vitest.config.ts` thresholds up as each lands.
-3. **Validate MCP handler arguments** — `src/main/ipc.ts:777-805` validates
+2. **Validate MCP handler arguments** — `src/main/ipc.ts:777-805` validates
    `args.directory` but passes `args.name` and `args.config` through unchecked. The M2.3
    tests pin the current behaviour; they do not make it correct. Recorded in
    `docs/plans/m2.3-ipc-boundary/SPEC.md` § Findings.
-4. **Decide `feat/p3-code-surface`** — unmerged, 2 commits ahead. `933329c` is preserved
+3. **Decide `feat/p3-code-surface`** — unmerged, 2 commits ahead. `933329c` is preserved
    by tag `v0.7.0`; only `26f227b` ("WIP: epitaxy pre-switch") would become unreachable,
    so deletion needs `git branch -D`. Owner's call.
