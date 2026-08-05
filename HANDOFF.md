@@ -66,7 +66,7 @@ column without re-checking.
 | M5.1 permission profiles — not started | **Done** — `lib/permissionPresets.ts`, ask/workspace/auto, wired into Settings |
 | M6.2 git status null on non-repo — not started | **Done** — `gitService.ts:416` returns null; branches returns `[]` |
 | M7.3 persist UI state — not started | **Done** — `prefs.ts`, `sessionMeta.ts`, `tips.ts` |
-| M2.5 slice coverage — 0/7 | **Mostly done** — event, session, prefs, nanoQuota, git, editor, agent, subagent, terminal, fileTree all covered |
+| M2.5 slice coverage — 0/7 | **Mostly done** — event, session, prefs, nanoQuota, git, editor, agent, subagent, terminal, fileTree covered; `uiSlice` taken 3.44% → 100% on 2026-08-05. Still low, measured that day: `routingSlice` 2.08%, `projectsSlice` 4%, `compareSlice` 4.08%, `imagesSlice` 10.34%, `api.ts` 30.76% |
 | M8.1 fix dompurify by bumping monaco to 0.53.0 | **Wrong and harmful.** Tree is already on monaco 0.56.0 (latest stable), which still pins dompurify 3.4.8. `npm audit fix --force` would *downgrade* monaco three minors to "fix" a moderate. Do not run it |
 | Coverage 50.39% / 810 tests / 62 files | 62.69% / 1099 tests / 72 files |
 
