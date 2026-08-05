@@ -161,9 +161,19 @@ function saveSettings(path: string, settings: AppSettings): void {
   writeFileSync(path, `${JSON.stringify(document, null, 2)}\n`, 'utf8')
 }
 
+// A short, fixed list of accelerators unlikely to already be claimed by another app, offered as
+// concrete next steps when the configured one fails to register. Not validated against the OS —
+// just plausible alternatives to type into the input that's already on screen.
+const SHORTCUT_ALTERNATIVES = ['Ctrl+Alt+O', 'Ctrl+Shift+Space', 'Alt+Shift+Space']
+
+function suggestAlternatives(accelerator: string): string[] {
+  return SHORTCUT_ALTERNATIVES.filter((candidate) => candidate !== accelerator).slice(0, 2)
+}
+
 function shortcutFailure(accelerator: string, error?: unknown): string {
   const detail = error instanceof Error && error.message.trim() ? ` ${error.message.trim()}` : ''
-  return `Unable to register global shortcut "${accelerator}"; it may be invalid or already in use.${detail}`
+  const alternatives = suggestAlternatives(accelerator).map((candidate) => `"${candidate}"`).join(' or ')
+  return `Unable to register global shortcut "${accelerator}"; it may be invalid or already in use.${detail} Try ${alternatives} instead.`
 }
 
 /**
@@ -176,6 +186,10 @@ export function createAppSettingsController(options: AppSettingsOptions): AppSet
   let settings = loadSettings(storagePath) ?? cloneSettings(DEFAULT_APP_SETTINGS)
   let registeredAccelerator: string | null = null
   let shortcutError: string | undefined
+  // The last accelerator this controller itself successfully registered — distinct from
+  // `settings.globalShortcut`, which tracks what the user asked for even when it failed. Used to
+  // fall back to a known-working binding rather than leaving Quick Entry with no shortcut at all.
+  let lastGoodAccelerator: string | null = null
 
   // Ensure a missing, corrupt, or old-version file is replaced with the current schema.
   try {
@@ -190,6 +204,7 @@ export function createAppSettingsController(options: AppSettingsOptions): AppSet
       const registered = shortcut.register(settings.globalShortcut, options.onShortcut)
       if (registered) {
         registeredAccelerator = settings.globalShortcut
+        lastGoodAccelerator = settings.globalShortcut
       } else {
         registeredAccelerator = null
         shortcutError = shortcutFailure(settings.globalShortcut)
@@ -218,8 +233,29 @@ export function createAppSettingsController(options: AppSettingsOptions): AppSet
       const shortcutChanged = next.globalShortcut !== settings.globalShortcut
       settings = next
       if (shortcutChanged) {
+        const previousGood = lastGoodAccelerator
         if (registeredAccelerator) shortcut.unregister(registeredAccelerator)
         registeredAccelerator = null
+        registerConfiguredShortcut()
+
+        // The new accelerator failed, and something was working before: re-register it rather
+        // than leaving Quick Entry dead. `settings.globalShortcut` still reflects what the user
+        // asked for (so the input keeps showing it and Apply can be retried), but the accelerator
+        // actually listening is the last one known to work.
+        if (!registeredAccelerator && previousGood && previousGood !== next.globalShortcut) {
+          try {
+            if (shortcut.register(previousGood, options.onShortcut)) {
+              registeredAccelerator = previousGood
+              shortcutError = `${shortcutError ?? ''} Kept the previous shortcut "${previousGood}" active in the meantime.`.trim()
+            }
+          } catch {
+            // Fall through with the primary failure's shortcutError already set.
+          }
+        }
+      } else if (!registeredAccelerator) {
+        // Nothing changed, but the configured shortcut isn't registered (e.g. a previous Apply
+        // failed). Retry on demand — cheap, and lets the user recover just by clicking Apply again
+        // once the app holding the accelerator releases it, without polling.
         registerConfiguredShortcut()
       }
       return result()

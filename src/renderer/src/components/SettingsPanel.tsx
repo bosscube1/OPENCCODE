@@ -17,6 +17,15 @@ function toEpochMs(epoch: number): number {
   return epoch < 1e12 ? epoch * 1000 : epoch
 }
 
+/** Render a bucket field honestly: a missing number is `—`, never `NaN`, `undefined`, or a blank that reads as zero. */
+function formatUsageNumber(n: number | undefined): string {
+  return n === undefined ? '—' : formatTokens(n)
+}
+
+function formatUsagePercent(n: number | undefined): string {
+  return n === undefined ? '—' : `${Math.round(n)}%`
+}
+
 /** Subscription quota readout. Fetches once on mount and on manual refresh — never polled. */
 function NanoUsageCard(): JSX.Element {
   const [usage, setUsage] = useState<NanoUsage | null>(null)
@@ -42,19 +51,36 @@ function NanoUsageCard(): JSX.Element {
 
   const noKey = error !== null && error.includes('No NanoGPT API key')
 
-  const bucket = (label: string, b: NanoUsage['daily']): JSX.Element => (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+  // A bucket that's `null` means "no such quota" — an honest, known fact, distinct from a
+  // missing/malformed bucket (`undefined`), which is genuinely unknown and falls through to the
+  // `—` handling in formatUsageNumber/formatUsagePercent.
+  const bucket = (
+    label: string,
+    b: NanoUsage['dailyInputTokens'],
+    limit: number | null | undefined
+  ): JSX.Element => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
       <span style={{ fontSize: '12px', fontWeight: 600 }}>{label}</span>
-      <span style={{ fontSize: '12px' }}>
-        {formatTokens(b.used)} used · {formatTokens(b.remaining)} left · {Math.round(b.percentUsed)}%
-      </span>
-      <span style={{ fontSize: '11px', color: 'var(--fg-dim)' }}>resets {relativeTime(toEpochMs(b.resetAt))}</span>
+      {b === null && limit === null ? (
+        <span style={{ fontSize: '12px', color: 'var(--fg-dim)' }}>No cap</span>
+      ) : b == null ? (
+        <span style={{ fontSize: '12px', color: 'var(--fg-dim)' }}>—</span>
+      ) : (
+        <>
+          <span style={{ fontSize: '12px', overflowWrap: 'break-word' }}>
+            {formatUsageNumber(b.used)} used · {formatUsageNumber(b.remaining)} left · {formatUsagePercent(b.percentUsed)}
+          </span>
+          <span style={{ fontSize: '11px', color: 'var(--fg-dim)' }}>
+            resets {b.resetAt === undefined ? '—' : relativeTime(toEpochMs(b.resetAt))}
+          </span>
+        </>
+      )}
     </div>
   )
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+    <div style={{ minWidth: 0 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '4px' }}>
         <span className="providers__name" style={{ fontSize: '12px' }}>Subscription quota</span>
         <button
           type="button"
@@ -72,12 +98,20 @@ function NanoUsageCard(): JSX.Element {
           Add a NanoGPT key under Provider Keys to see usage.
         </p>
       ) : error !== null ? (
-        <p role="alert" style={{ fontSize: '12px', color: 'var(--danger)', margin: 0 }}>{error}</p>
+        <p role="alert" style={{ fontSize: '12px', color: 'var(--danger)', margin: 0, overflowWrap: 'break-word' }}>{error}</p>
       ) : usage !== null ? (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-          {bucket('Daily', usage.daily)}
-          {bucket('Monthly', usage.monthly)}
-        </div>
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '10px' }}>
+            {bucket('Daily input tokens', usage.dailyInputTokens, usage.limits.dailyInputTokens)}
+            {bucket('Weekly input tokens', usage.weeklyInputTokens, usage.limits.weeklyInputTokens)}
+            {bucket('Daily images', usage.dailyImages, usage.limits.dailyImages)}
+          </div>
+          {usage.period?.currentPeriodEnd !== undefined ? (
+            <p style={{ fontSize: '11px', color: 'var(--fg-dim)', margin: '8px 0 0', overflowWrap: 'break-word' }}>
+              Period ends {relativeTime(Date.parse(usage.period.currentPeriodEnd))}
+            </p>
+          ) : null}
+        </>
       ) : null}
     </div>
   )

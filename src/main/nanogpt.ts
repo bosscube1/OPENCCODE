@@ -29,12 +29,43 @@ export type NanoImageModel = {
   tags?: string[]
 }
 
+/**
+ * Every field is independently optional. NanoGPT does not publish a schema for
+ * `/api/subscription/v1/usage`, so this type deliberately assumes nothing: a read-only quota
+ * readout should degrade (show what's known, `—` for what isn't) rather than hard-fail because
+ * one number is missing. Do not tighten these back to required without a captured payload to
+ * justify it.
+ */
+export type NanoUsageBucket = {
+  used?: number
+  remaining?: number
+  percentUsed?: number
+  resetAt?: number
+}
+
+/**
+ * Captured from a live `/api/subscription/v1/usage` response (2026-08): the real buckets are
+ * `dailyInputTokens`, `weeklyInputTokens`, and `dailyImages` — there is no `monthly` bucket at
+ * all, and the period boundary lives at `period.currentPeriodEnd` instead.
+ *
+ * Each bucket/limit is `NanoUsageBucket | null | undefined` (not just optional), because "no
+ * cap" and "unknown" are different facts and both occur on real accounts: a plan with no daily
+ * token cap sends `dailyInputTokens: null` explicitly (we preserve that as `null`), whereas a
+ * key that's simply absent or malformed means we don't know (`undefined`, degrades to `—` in the
+ * renderer). Do not collapse the two.
+ */
 export type NanoUsage = {
   active: boolean
-  limits: { daily: number; monthly: number }
-  enforceDailyLimit?: boolean
-  daily: { used: number; remaining: number; percentUsed: number; resetAt: number }
-  monthly: { used: number; remaining: number; percentUsed: number; resetAt: number }
+  limits: {
+    dailyInputTokens?: number | null
+    weeklyInputTokens?: number | null
+    dailyImages?: number | null
+  }
+  dailyInputTokens?: NanoUsageBucket | null
+  weeklyInputTokens?: NanoUsageBucket | null
+  dailyImages?: NanoUsageBucket | null
+  /** `currentPeriodEnd` is an ISO timestamp string, e.g. from `period.currentPeriodEnd`. */
+  period?: { currentPeriodEnd?: string }
   state: string
   graceUntil?: string | null
 }
@@ -207,13 +238,43 @@ export async function fetchImageModels(): Promise<NanoImageModel[]> {
   return extractDataArray(payload).filter(hasNonEmptyId).map(toImageModel)
 }
 
-function toUsageBucket(value: unknown): { used: number; remaining: number; percentUsed: number; resetAt: number } | undefined {
+/**
+ * Resolve a limit field: an explicit `null` means "no cap" and is preserved as `null`; a finite
+ * number is kept as-is; anything else (key absent, or present but not a number) is unknown and
+ * becomes `undefined`. Keeping these distinct matters — "no cap" and "we don't know" render
+ * differently.
+ */
+function toLimit(value: unknown): number | null | undefined {
+  if (value === null) return null
+  return finiteNumberOrUndefined(value)
+}
+
+/**
+ * Build a usage bucket from whatever fields are actually present, deriving the rest where
+ * possible instead of demanding all four. Given a `limit` (the cap from `payload.limits`, itself
+ * `number | null | undefined`), `used` and `remaining` are complements of each other, and
+ * `percentUsed` follows from `used` — but only once the limit is a known finite number; a `null`
+ * (no cap) or unknown limit leaves those undecidable and they stay `undefined` rather than being
+ * fabricated. Anything that can't be derived is left `undefined` — the renderer shows `—` for
+ * those.
+ *
+ * Returns `null` when the bucket itself is explicitly `null` in the payload — a known fact ("no
+ * such quota"), not a parse failure. Returns `undefined` when the bucket key is absent or not an
+ * object (unknown/malformed).
+ */
+function toUsageBucket(value: unknown, limit: number | null | undefined): NanoUsageBucket | null | undefined {
+  if (value === null) return null
   if (!isRecord(value)) return undefined
-  const used = finiteNumberOrUndefined(value.used)
-  const remaining = finiteNumberOrUndefined(value.remaining)
-  const percentUsed = finiteNumberOrUndefined(value.percentUsed)
+  let used = finiteNumberOrUndefined(value.used)
+  let remaining = finiteNumberOrUndefined(value.remaining)
+  let percentUsed = finiteNumberOrUndefined(value.percentUsed)
   const resetAt = finiteNumberOrUndefined(value.resetAt)
-  if (used === undefined || remaining === undefined || percentUsed === undefined || resetAt === undefined) return undefined
+
+  const knownLimit = typeof limit === 'number' ? limit : undefined
+  if (used === undefined && remaining !== undefined && knownLimit !== undefined) used = knownLimit - remaining
+  if (remaining === undefined && used !== undefined && knownLimit !== undefined) remaining = knownLimit - used
+  if (percentUsed === undefined && used !== undefined && knownLimit) percentUsed = (used / knownLimit) * 100
+
   return { used, remaining, percentUsed, resetAt }
 }
 
@@ -238,24 +299,54 @@ export async function fetchSubscriptionUsage(): Promise<NanoUsage> {
   }
   if (!isRecord(payload)) throw new Error(safeError(new Error('NanoGPT subscription usage response was not a JSON object.')))
 
-  const daily = toUsageBucket(payload.daily)
-  const monthly = toUsageBucket(payload.monthly)
-  if (!daily || !monthly) {
-    throw new Error(safeError(new Error('NanoGPT subscription usage response is missing usable daily/monthly usage data.')))
+  // Prefer the real field names captured from a live response. `dailyInputTokens` is the only
+  // one with a legacy equivalent (the old, wrong `daily` name) — fall back to it only when
+  // `dailyInputTokens` isn't present at all (an explicit `null` is meaningful and is NOT
+  // overridden by the fallback). `weeklyInputTokens` and `dailyImages` have no legacy names, and
+  // `monthly` is deliberately never used as a fallback for `weeklyInputTokens` — a weekly number
+  // shown under a monthly label would be a lie, not just an approximation.
+  const dailyInputTokensRaw = 'dailyInputTokens' in payload ? payload.dailyInputTokens : payload.daily
+  const weeklyInputTokensRaw = payload.weeklyInputTokens
+  const dailyImagesRaw = payload.dailyImages
+
+  // Only a genuinely unusable payload throws — none of the three buckets present as an object in
+  // any form (including the legacy `daily` fallback). A bucket that's present but missing
+  // individual fields, or explicitly `null`, degrades via toUsageBucket instead.
+  //
+  // The message names the keys the payload *did* carry, so a repeat failure is diagnosable
+  // without guessing again. Keys only, never values — the payload is account data.
+  if (!isRecord(dailyInputTokensRaw) && !isRecord(weeklyInputTokensRaw) && !isRecord(dailyImagesRaw)) {
+    const observed = Object.keys(payload)
+    const sawKeys = observed.length ? ` Response carried: ${observed.join(', ')}.` : ' Response was an empty object.'
+    throw new Error(
+      safeError(
+        new Error(
+          `NanoGPT subscription usage response has none of dailyInputTokens, weeklyInputTokens, or dailyImages.${sawKeys}`
+        )
+      )
+    )
   }
 
   const limitsSource = isRecord(payload.limits) ? payload.limits : {}
-  const dailyLimit = finiteNumberOrUndefined(limitsSource.daily) ?? 0
-  const monthlyLimit = finiteNumberOrUndefined(limitsSource.monthly) ?? 0
+  const dailyInputTokensLimit = toLimit('dailyInputTokens' in limitsSource ? limitsSource.dailyInputTokens : limitsSource.daily)
+  const weeklyInputTokensLimit = toLimit(limitsSource.weeklyInputTokens)
+  const dailyImagesLimit = toLimit(limitsSource.dailyImages)
 
   const usage: NanoUsage = {
     active: payload.active === true,
-    limits: { daily: dailyLimit, monthly: monthlyLimit },
-    daily,
-    monthly,
+    limits: {
+      dailyInputTokens: dailyInputTokensLimit,
+      weeklyInputTokens: weeklyInputTokensLimit,
+      dailyImages: dailyImagesLimit
+    },
+    dailyInputTokens: toUsageBucket(dailyInputTokensRaw, dailyInputTokensLimit),
+    weeklyInputTokens: toUsageBucket(weeklyInputTokensRaw, weeklyInputTokensLimit),
+    dailyImages: toUsageBucket(dailyImagesRaw, dailyImagesLimit),
     state: typeof payload.state === 'string' ? payload.state : 'unknown'
   }
-  if (typeof payload.enforceDailyLimit === 'boolean') usage.enforceDailyLimit = payload.enforceDailyLimit
+  if (isRecord(payload.period) && typeof payload.period.currentPeriodEnd === 'string') {
+    usage.period = { currentPeriodEnd: payload.period.currentPeriodEnd }
+  }
   if (typeof payload.graceUntil === 'string' || payload.graceUntil === null) usage.graceUntil = payload.graceUntil
   return usage
 }
