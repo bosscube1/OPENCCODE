@@ -233,6 +233,7 @@ export function StatusBar(): JSX.Element {
       <button
         type="button"
         className="app__status-item"
+        aria-label="Settings (Ctrl+,)"
         title="Settings (Ctrl+,)"
         onClick={() => setShowSettings(true)}
       >
@@ -242,6 +243,7 @@ export function StatusBar(): JSX.Element {
       <button
         type="button"
         className="app__status-item"
+        aria-label="Toggle theme (auto/dark/light)"
         title="Toggle Theme (auto/dark/light)"
         onClick={cycleTheme}
       >

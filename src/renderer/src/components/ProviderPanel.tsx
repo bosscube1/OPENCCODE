@@ -569,7 +569,7 @@ export function ProviderPanel({ open, onClose }: { open: boolean; onClose: () =>
       <div className="providers__panel">
         <div className="providers__head">
           <span className="providers__title">Provider Keys</span>
-          <button type="button" className="providers__close" onClick={handleClose} title="Close (Esc)">
+          <button type="button" className="providers__close" onClick={handleClose} aria-label="Close provider keys (Esc)" title="Close (Esc)">
             ×
           </button>
         </div>

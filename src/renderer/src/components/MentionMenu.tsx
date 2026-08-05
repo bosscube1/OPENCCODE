@@ -1,72 +1,18 @@
-import { useEffect, useState } from 'react'
-
 interface MentionMenuProps {
   query: string
-  directory: string
+  files: string[]
+  selectedIndex: number
   onSelect: (filepath: string) => void
-  onClose: () => void
+  onHoverIndex: (index: number) => void
 }
 
-export function MentionMenu({ query, directory, onSelect, onClose }: MentionMenuProps) {
-  const [files, setFiles] = useState<string[]>([])
-  const [selectedIndex, setSelectedIndex] = useState(0)
-
-  useEffect(() => {
-    let cancelled = false
-    const timer = setTimeout(() => {
-      const q = query.trim()
-      if (window.api && window.api.find) {
-        window.api.find
-          .files(directory, q)
-          .then((result) => {
-            if (cancelled) return
-            setFiles(Array.isArray(result) ? result.slice(0, 10) : [])
-            setSelectedIndex(0)
-          })
-          .catch(() => {
-            if (cancelled) return
-            setFiles([])
-          })
-      }
-    }, 150)
-
-    return () => {
-      cancelled = true
-      clearTimeout(timer)
-    }
-  }, [query, directory])
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (files.length === 0) {
-        if (e.key === 'Escape') {
-          e.preventDefault()
-          onClose()
-        }
-        return
-      }
-
-      if (e.key === 'ArrowDown') {
-        e.preventDefault()
-        setSelectedIndex((i) => (i + 1) % files.length)
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault()
-        setSelectedIndex((i) => (i - 1 + files.length) % files.length)
-      } else if (e.key === 'Enter' || e.key === 'Tab') {
-        e.preventDefault()
-        if (files[selectedIndex]) {
-          onSelect(files[selectedIndex])
-        }
-      } else if (e.key === 'Escape') {
-        e.preventDefault()
-        onClose()
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown, true)
-    return () => document.removeEventListener('keydown', handleKeyDown, true)
-  }, [files, selectedIndex, onSelect, onClose])
-
+/**
+ * Purely presentational. File fetching and keyboard handling both live in
+ * Composer.tsx now — see lib/keyboard.ts for why. This component only
+ * renders the list `files`/`selectedIndex` it is handed and reports mouse
+ * interaction back up.
+ */
+export function MentionMenu({ query, files, selectedIndex, onSelect, onHoverIndex }: MentionMenuProps) {
   if (files.length === 0) {
     return (
       <div className="composer__mention-menu" role="listbox">
@@ -85,7 +31,7 @@ export function MentionMenu({ query, directory, onSelect, onClose }: MentionMenu
           key={file}
           className={`composer__mention-item${idx === selectedIndex ? ' composer__mention-item--active' : ''}`}
           onClick={() => onSelect(file)}
-          onMouseEnter={() => setSelectedIndex(idx)}
+          onMouseEnter={() => onHoverIndex(idx)}
         >
           <span className="composer__mention-name">{file}</span>
         </button>

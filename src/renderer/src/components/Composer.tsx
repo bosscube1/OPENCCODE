@@ -3,6 +3,7 @@ import type { ChangeEvent, KeyboardEvent, ReactNode } from 'react'
 import { useStore } from '../lib/store'
 import { getMatchingCommands, type SlashCommand } from '../lib/commands'
 import { guessMime, joinPath, toFileUrl } from '../lib/fileurl'
+import { resolveMentionMenuKey } from '../lib/keyboard'
 import type { PromptPart } from '../lib/types'
 import { MentionMenu } from './MentionMenu'
 import { ModelPicker } from './ModelPicker'
@@ -46,8 +47,43 @@ export function Composer(): ReactNode {
   const [attachments, setAttachments] = useState<Array<{ filename: string; absPath: string }>>([])
   const [mentionQuery, setMentionQuery] = useState<string | null>(null)
   const [mentionStart, setMentionStart] = useState<number | null>(null)
+  const [mentionFiles, setMentionFiles] = useState<string[]>([])
+  const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0)
   const [isDragging, setIsDragging] = useState(false)
   const areaRef = useRef<HTMLTextAreaElement | null>(null)
+
+  // Fetches the file list backing the @mention menu. This used to live inside
+  // MentionMenu itself, but the menu's open/closed and selection state now has
+  // to be visible here so onKeyDown can consult it (see lib/keyboard.ts) —
+  // MentionMenu is presentational only.
+  useEffect(() => {
+    if (mentionQuery === null || !directory) {
+      setMentionFiles([])
+      return
+    }
+    let cancelled = false
+    const timer = setTimeout(() => {
+      const q = mentionQuery.trim()
+      if (window.api && window.api.find) {
+        window.api.find
+          .files(directory, q)
+          .then((result) => {
+            if (cancelled) return
+            setMentionFiles(Array.isArray(result) ? result.slice(0, 10) : [])
+            setMentionSelectedIndex(0)
+          })
+          .catch(() => {
+            if (cancelled) return
+            setMentionFiles([])
+          })
+      }
+    }, 150)
+
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [mentionQuery, directory])
 
   const slashMatches = useMemo(() => {
     if (text.startsWith('/')) {
@@ -144,79 +180,6 @@ export function Composer(): ReactNode {
     areaRef.current?.focus()
   }, [])
 
-  const onKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (showSlashMenu) {
-        if (event.key === 'ArrowDown') {
-          event.preventDefault()
-          setSlashIndex((i) => (i + 1) % slashMatches.length)
-          return
-        }
-        if (event.key === 'ArrowUp') {
-          event.preventDefault()
-          setSlashIndex((i) => (i - 1 + slashMatches.length) % slashMatches.length)
-          return
-        }
-        if (event.key === 'Tab') {
-          event.preventDefault()
-          const cmd = slashMatches[slashIndex]
-          if (cmd) selectSlashCommand(cmd)
-          return
-        }
-        if (event.key === 'Escape') {
-          event.preventDefault()
-          setText('')
-          return
-        }
-      }
-
-      if (event.key !== 'Enter') return
-      if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return
-      if (event.nativeEvent.isComposing) return
-      if (mentionQuery !== null) return // Let MentionMenu handle Enter if open
-      event.preventDefault()
-
-      if (showSlashMenu && text.trim().startsWith('/')) {
-        const cmd = slashMatches[slashIndex]
-        if (cmd && text.trim() === cmd.name) {
-          submit()
-        } else if (cmd) {
-          submit(cmd.name)
-        } else {
-          submit()
-        }
-        return
-      }
-
-      submit()
-    },
-    [showSlashMenu, slashMatches, slashIndex, selectSlashCommand, submit, text, mentionQuery]
-  )
-
-  const onChange = useCallback((event: ChangeEvent<HTMLTextAreaElement>) => {
-    const val = event.target.value
-    setText(val)
-
-    if (val.startsWith('/')) {
-      setMentionQuery(null)
-      setMentionStart(null)
-      return
-    }
-
-    const cursor = event.target.selectionStart
-    const textBeforeCursor = val.slice(0, cursor)
-    const match = textBeforeCursor.match(/(?:^|\s)@([^\s]*)$/)
-
-    if (match && match.index !== undefined) {
-      const startIdx = match.index + (textBeforeCursor[match.index] === '@' ? 0 : 1)
-      setMentionStart(startIdx)
-      setMentionQuery(match[1])
-    } else {
-      setMentionQuery(null)
-      setMentionStart(null)
-    }
-  }, [])
-
   /** Shared append logic for every attachment source (mentions, drag-and-drop, the
    *  attach button, and clipboard paste): derive the filename from the absolute path
    *  and skip anything already attached. */
@@ -248,6 +211,117 @@ export function Composer(): ReactNode {
     setMentionStart(null)
     areaRef.current?.focus()
   }, [text, mentionStart, mentionQuery, directory, addAttachments])
+
+  const onKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLTextAreaElement>) => {
+      // Mention menu owns these keys first when it's open. This is the single point
+      // of contact for the collision that used to exist between this handler and
+      // MentionMenu's own (now-removed) capture-phase document listener: exactly one
+      // listener now looks at mention-menu keys, and resolveMentionMenuKey is the
+      // pure decision of what they mean.
+      const mentionAction = resolveMentionMenuKey(event.nativeEvent, {
+        open: mentionQuery !== null,
+        fileCount: mentionFiles.length,
+        selectedIndex: mentionSelectedIndex
+      })
+      if (mentionAction) {
+        event.preventDefault()
+        if (mentionAction.type === 'move') {
+          setMentionSelectedIndex(mentionAction.nextIndex)
+        } else if (mentionAction.type === 'select') {
+          const file = mentionFiles[mentionSelectedIndex]
+          if (file) onSelectMention(file)
+        } else {
+          setMentionQuery(null)
+          setMentionStart(null)
+        }
+        return
+      }
+
+      if (showSlashMenu) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault()
+          setSlashIndex((i) => (i + 1) % slashMatches.length)
+          return
+        }
+        if (event.key === 'ArrowUp') {
+          event.preventDefault()
+          setSlashIndex((i) => (i - 1 + slashMatches.length) % slashMatches.length)
+          return
+        }
+        if (event.key === 'Tab') {
+          event.preventDefault()
+          const cmd = slashMatches[slashIndex]
+          if (cmd) selectSlashCommand(cmd)
+          return
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          setText('')
+          return
+        }
+      }
+
+      if (event.key !== 'Enter') return
+      if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return
+      if (event.nativeEvent.isComposing) return
+      // mentionQuery !== null but we got here means resolveMentionMenuKey returned
+      // null for this Enter — the "no files found" panel is showing (see its
+      // fileCount === 0 branch) — so still don't let it fall through to submit.
+      if (mentionQuery !== null) return
+      event.preventDefault()
+
+      if (showSlashMenu && text.trim().startsWith('/')) {
+        const cmd = slashMatches[slashIndex]
+        if (cmd && text.trim() === cmd.name) {
+          submit()
+        } else if (cmd) {
+          submit(cmd.name)
+        } else {
+          submit()
+        }
+        return
+      }
+
+      submit()
+    },
+    [
+      mentionQuery,
+      mentionFiles,
+      mentionSelectedIndex,
+      onSelectMention,
+      showSlashMenu,
+      slashMatches,
+      slashIndex,
+      selectSlashCommand,
+      submit,
+      text
+    ]
+  )
+
+  const onChange = useCallback((event: ChangeEvent<HTMLTextAreaElement>) => {
+    const val = event.target.value
+    setText(val)
+
+    if (val.startsWith('/')) {
+      setMentionQuery(null)
+      setMentionStart(null)
+      return
+    }
+
+    const cursor = event.target.selectionStart
+    const textBeforeCursor = val.slice(0, cursor)
+    const match = textBeforeCursor.match(/(?:^|\s)@([^\s]*)$/)
+
+    if (match && match.index !== undefined) {
+      const startIdx = match.index + (textBeforeCursor[match.index] === '@' ? 0 : 1)
+      setMentionStart(startIdx)
+      setMentionQuery(match[1])
+    } else {
+      setMentionQuery(null)
+      setMentionStart(null)
+    }
+  }, [])
 
   /** Only react to file drags — dragging plain text/HTML must not trigger the overlay or a drop.
    *  Covers both an OS file drag (`Files`) and an internal drag started from the file tree
@@ -394,12 +468,10 @@ export function Composer(): ReactNode {
       {mentionQuery !== null && directory && (
         <MentionMenu
           query={mentionQuery}
-          directory={directory}
+          files={mentionFiles}
+          selectedIndex={mentionSelectedIndex}
           onSelect={onSelectMention}
-          onClose={() => {
-            setMentionQuery(null)
-            setMentionStart(null)
-          }}
+          onHoverIndex={setMentionSelectedIndex}
         />
       )}
 
