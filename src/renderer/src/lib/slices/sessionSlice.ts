@@ -33,20 +33,50 @@ import type { AppState, SetState, GetState } from './types'
 import type { MessageWithParts, PromptPart } from '../types'
 
 /**
+ * Memoized cache for harnessPromptFields. Holds the last computed result
+ * along with the sessionID and state values that produced it.
+ */
+let harnessPromptCache: {
+  sessionID: string
+  agent: string | undefined
+  readOnly: boolean
+  result: { agent?: string; tools?: Record<string, boolean> }
+} | null = null
+
+/**
  * Harness fields for a prompt into `sessionID`: the pinned agent (when any) and the
  * read-only tool policy (when toggled on). Both are omitted entirely when unset so the
  * prompt body — and the server's default behaviour — is untouched.
+ *
+ * Memoized to avoid recomputation on every send. The cache is keyed on the actual
+ * state values (sessionID, sessionAgents[sessionID], sessionReadOnly[sessionID]) rather
+ * than the function inputs, since the function is pure with respect to these values.
  */
-function harnessPromptFields(
+export function harnessPromptFields(
   get: GetState,
   sessionID: string
 ): { agent?: string; tools?: Record<string, boolean> } {
   const agent = get().sessionAgents[sessionID]
   const readOnly = get().sessionReadOnly[sessionID] === true
-  return {
+
+  // Return cached result if sessionID and state values haven't changed
+  if (
+    harnessPromptCache &&
+    harnessPromptCache.sessionID === sessionID &&
+    harnessPromptCache.agent === agent &&
+    harnessPromptCache.readOnly === readOnly
+  ) {
+    return harnessPromptCache.result
+  }
+
+  // Compute new result and update cache
+  const result = {
     ...(agent ? { agent } : {}),
     ...(readOnly ? { tools: { ...READONLY_TOOLS } } : {})
   }
+
+  harnessPromptCache = { sessionID, agent, readOnly, result }
+  return result
 }
 
 export type SessionSlice = Pick<

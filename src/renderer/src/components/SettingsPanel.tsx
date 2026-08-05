@@ -450,7 +450,7 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
       <div className="providers__panel">
         <div className="providers__head">
           <span className="providers__title">Settings</span>
-          <button type="button" className="providers__close" onClick={onClose} title="Close (Esc)">
+          <button type="button" className="providers__close" onClick={onClose} aria-label="Close settings (Esc)" title="Close (Esc)">
             ×
           </button>
         </div>

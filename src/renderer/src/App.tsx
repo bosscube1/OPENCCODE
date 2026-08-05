@@ -21,6 +21,7 @@ import { ShortcutsHelp } from './components/ShortcutsHelp'
 import { TipBar } from './components/TipBar'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { useStore } from './lib/store'
+import { SHORTCUTS, matchesShortcut } from './lib/shortcuts'
 import type { AppState } from './lib/slices/types'
 import './components/panels.css'
 import './index.css'
@@ -215,57 +216,73 @@ export function App(): JSX.Element {
 
   /* ---- global shortcuts ------------------------------------------------- */
   useEffect(() => {
-    // TODO(shortcuts registry): lib/shortcuts.ts is the intended future source of truth
-    // for these bindings — this handler still owns the actual key matching for now.
+    // lib/shortcuts.ts's SHORTCUTS registry is the source of truth for which key
+    // combos exist; this handler is only the App-level dispatch table for the
+    // bindings it owns. 'find-in-session' and 'search-all-chats' are also in the
+    // registry but are matched and handled independently in Chat.tsx / Sidebar.tsx,
+    // so they fall through the switch below untouched (no preventDefault) — matching
+    // this handler to those ids would just mean doing nothing, same as skipping them.
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         window.dispatchEvent(new Event(CLOSE_PROVIDERS_EVENT))
         return
       }
-      // F1 has no modifier, so it must be handled before the ctrl/meta guard below
-      // (which early-returns for every unmodified key) or it will never fire.
+      // F1 has no modifier and isn't in SHORTCUTS (Ctrl+/ is the documented binding
+      // for the same action), so it's handled here directly.
       if (e.key === 'F1' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
         e.preventDefault()
         setShortcutsHelpOpen((open) => !open)
         return
       }
-      if (!(e.ctrlKey || e.metaKey) || e.altKey) return
-      const key = e.key.toLowerCase()
-      if (e.shiftKey && key === 'l') {
-        // Ctrl+Shift+L opens the floating Gemini Live copilot window. Checked before the
-        // plain-letter branches below so a future unshifted 'l' binding can't shadow it.
-        e.preventDefault()
-        void window.api.liveWindow.open()
-        return
-      }
-      if (key === 'n') {
-        e.preventDefault()
-        if (useStore.getState().directory) void useStore.getState().newSession()
-      } else if (key === 'o') {
-        e.preventDefault()
-        void useStore.getState().pickDirectory()
-      } else if (key === 'k') {
-        // Ctrl+K stays on the model picker. The command palette takes Ctrl+P /
-        // Ctrl+Shift+P instead: rebinding a shortcut that is already in the
-        // user's fingers costs more than it gains.
-        e.preventDefault()
-        window.dispatchEvent(new Event(FOCUS_MODEL_EVENT))
-      } else if (key === 'p') {
-        e.preventDefault()
-        useStore.getState().setPaletteOpen(!useStore.getState().paletteOpen)
-      } else if (key === 'b') {
-        e.preventDefault()
-        const { panelTab, setPanelTab } = useStore.getState()
-        setPanelTab(panelTab === null ? 'editor' : null)
-      } else if (key === '`') {
-        e.preventDefault()
-        useStore.getState().setPanelTab('terminal')
-      } else if (key === ',') {
-        e.preventDefault()
-        window.dispatchEvent(new Event(TOGGLE_SETTINGS_EVENT))
-      } else if (key === '/') {
-        e.preventDefault()
-        setShortcutsHelpOpen((open) => !open)
+
+      const shortcut = SHORTCUTS.find((s) => matchesShortcut(e, s))
+      if (!shortcut) return
+
+      switch (shortcut.id) {
+        case 'gemini-live':
+          // Opens the floating Gemini Live copilot window.
+          e.preventDefault()
+          void window.api.liveWindow.open()
+          break
+        case 'new-session':
+          e.preventDefault()
+          if (useStore.getState().directory) void useStore.getState().newSession()
+          break
+        case 'open-folder':
+          e.preventDefault()
+          void useStore.getState().pickDirectory()
+          break
+        case 'model-picker':
+          // Ctrl+K stays on the model picker. The command palette takes Ctrl+P /
+          // Ctrl+Shift+P instead: rebinding a shortcut that is already in the
+          // user's fingers costs more than it gains.
+          e.preventDefault()
+          window.dispatchEvent(new Event(FOCUS_MODEL_EVENT))
+          break
+        case 'command-palette':
+          e.preventDefault()
+          useStore.getState().setPaletteOpen(!useStore.getState().paletteOpen)
+          break
+        case 'toggle-panel': {
+          e.preventDefault()
+          const { panelTab, setPanelTab } = useStore.getState()
+          setPanelTab(panelTab === null ? 'editor' : null)
+          break
+        }
+        case 'terminal':
+          e.preventDefault()
+          useStore.getState().setPanelTab('terminal')
+          break
+        case 'settings':
+          e.preventDefault()
+          window.dispatchEvent(new Event(TOGGLE_SETTINGS_EVENT))
+          break
+        case 'shortcuts-help':
+          e.preventDefault()
+          setShortcutsHelpOpen((open) => !open)
+          break
+        default:
+          break
       }
     }
     window.addEventListener('keydown', onKey)
