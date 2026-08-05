@@ -1,137 +1,299 @@
 # HANDOFF.md
 
-Written 2026-08-04, end of wave 2. Supersedes the wave-1 handoff.
+Written 2026-08-05, end of the release-hardening wave. Supersedes the wave-2 handoff
+(2026-08-04), whose open follow-ups are carried forward in full below — none of them were
+addressed by this wave.
 
-Branch: `feat/wave1-coverage` — **0 behind, 3 ahead of `origin/main`**, nothing pushed.
+Branch: `main` at `a7ab838`, **pushed**. Tagged `v1.0.2`, **pushed**. GitHub Release
+`v1.0.2` published with all three assets, verified via the API. Working tree clean.
+Nothing in flight.
 
-The wave-1 handoff opened with a STOP saying the branch was 3 commits behind `origin/main`
-and that the 217 new tests had been written against a 2-version-stale tree. **That is
-resolved.** The upstream merge landed (`b0bf8ff`, PR #4), the branch now sits on top of
-current `origin/main`, and the full suite was re-verified against the merged tree.
+> **Read §4 before touching anything NanoGPT.** The vendored API reference on this machine
+> documents the subscription-usage endpoint incorrectly, and following it is what produced
+> a bug that survived two waves.
 
 ---
 
-## Where things stand
+## 1. Where things stand
 
-Tree is clean. Three commits, all verified before committing.
+| Signal | Value | Re-check with |
+|---|---|---|
+| Version | 1.0.2 — `package.json` and tag agree | `node -p "require('./package.json').version"` |
+| Typecheck | clean, node + web | `npm run typecheck` |
+| Tests | **1099 passing / 72 files** | `npx vitest run` |
+| Coverage | **62.69% stmts · 59.66% branch · 65.37% lines** | `npx vitest run --coverage` |
+| Contracts | PASS | `node scripts/check-contracts.mjs` |
+| Lint | 0 errors, 89 warnings | `npx eslint .` |
+| `npm audit` | **0 high** · 1 moderate · 1 low | `npm audit` |
+| Build | `dist/OpenCode-Desktop-1.0.2-{setup,portable}.exe` + `latest.yml` + blockmap | `npm run dist:win` |
+| Signing | **NotSigned** | `Get-AuthenticodeSignature dist\*.exe` |
+
+The 89 lint warnings are all `no-explicit-any` and were the pre-existing wave-1 baseline —
+this wave added none. Ratchet down from 89; do not treat it as a regression.
+
+---
+
+## 2. What this wave did
 
 | Commit | What |
 |---|---|
-| `b638b0c` | `docs:` archived three dead handoff artifacts under `docs/history/` |
-| `5851a22` | `test:` 217 tests covering the SSE reducer, session lifecycle, failover, prefs |
-| `2ae4b3c` | `feat:` NanoGPT quota/balance/gallery, conformed to the published API |
+| `12355e5` | `chore:` 0.7.0 bump + `ROADMAP.md` (nine-module plan — **now partly stale, see §3**) |
+| `f69903f` | `feat:` M1 — `CHANGELOG.md`, `scripts/release.mjs`, CI packaging job, crash-log readout in Settings (`oc:crashlog:read` bounded 64 KiB tail, `oc:crashlog:reveal`) |
+| `5a652be` | `chore(deps):` M8 — cleared 3 high advisories, `@opencode-ai/sdk` 1.18.4 → 1.18.13, `npm audit --audit-level=high` CI gate |
+| `03b6963` | `fix:` NanoGPT usage shape + global-shortcut recovery (§4) |
+| `3fac850` | `fix:` rebase fallout — `StatusBar` and the quota-slice fixture onto the real usage shape |
+| `a7ab838` | `chore:` version 1.0.2 |
 
-Verification at the last commit:
+**The histories had diverged.** Local `main` had forked at `b0bf8ff` (PR #4) before the
+`feat/wave1-coverage` work; both sides then advanced. They were rebased together — nothing
+from `V1.0.1` was dropped, nothing from this wave was dropped. `feat/release-hardening` and
+the `backup/pre-rebase-main` safety ref have both been deleted.
+
+**`V1.0.1` shipped with `"version": "0.6.0"` in `package.json`.** Tag and in-app version
+disagreed, and `electron-updater` compares the package version, not the tag. Fixed by 1.0.2.
+`scripts/release.mjs` exists specifically to stop this recurring — use `npm run release <v>`
+rather than bumping by hand.
+
+---
+
+## 3. `ROADMAP.md` is stale — verified corrections
+
+It was written against a snapshot predating the wave-1 branch. Do not plan from its status
+column without re-checking.
+
+| Roadmap claim | Reality on `main` |
+|---|---|
+| M5.1 permission profiles — not started | **Done** — `lib/permissionPresets.ts`, ask/workspace/auto, wired into Settings |
+| M6.2 git status null on non-repo — not started | **Done** — `gitService.ts:416` returns null; branches returns `[]` |
+| M7.3 persist UI state — not started | **Done** — `prefs.ts`, `sessionMeta.ts`, `tips.ts` |
+| M2.5 slice coverage — 0/7 | **Mostly done** — event, session, prefs, nanoQuota, git, editor, agent, subagent, terminal, fileTree all covered |
+| M8.1 fix dompurify by bumping monaco to 0.53.0 | **Wrong and harmful.** Tree is already on monaco 0.56.0 (latest stable), which still pins dompurify 3.4.8. `npm audit fix --force` would *downgrade* monaco three minors to "fix" a moderate. Do not run it |
+| Coverage 50.39% / 810 tests / 62 files | 62.69% / 1099 tests / 72 files |
+
+Rewriting `ROADMAP.md` against `main` is a good first task for a fresh session (§6).
+
+---
+
+## 4. NanoGPT — the documentation on this machine is wrong
+
+`fetchSubscriptionUsage` parsed `daily` and `monthly` buckets. **The live API returns
+neither.** It returns:
 
 ```
-npm run typecheck                  exit 0, both projects
-npm test                           70 files, 1079 tests, all passing
-node scripts/check-contracts.mjs   PASS
-npm run lint                       0 errors, 89 pre-existing warnings, none new
-real app launch                    both NanoGPT surfaces confirmed on screen
+limits: { dailyInputTokens: null, weeklyInputTokens: <number>, dailyImages: <number> }
+dailyInputTokens:  null                                          // null = no cap on this plan
+weeklyInputTokens: { used, remaining, percentUsed, resetAt }
+dailyImages:       { used, remaining, percentUsed, resetAt }
+period:            { currentPeriodEnd: <ISO string> }
+active, state, graceUntil, allowOverage, cancelAtPeriodEnd, provider, ...
 ```
 
-## Exact next command
+**Why it survived two waves:** the vendored reference at
+`C:\Users\Hp\llm-wiki\raw\# NanoGPT API Documentation Referen.md` line 188 documents this
+endpoint as returning *"`active`, `limits.daily`, `daily.used`, `percentUsed`, `resetAt`,
+`graceUntil`"*. That is the broken shape. Wave 2's commit `2ae4b3c` "conformed to the
+published API" and left the usage parser wrong, because the published API description is
+wrong. The vendored doc is still worth reading for other endpoints, but **it is not
+authoritative — a live probe is.**
 
-Nothing is in flight.
+**How to capture a real payload** (this is the technique that finally worked):
+temporarily `console.error` the payload's **keys and value types only, never values** —
+it is account data — from inside `src/main/`, restart via the driver, read it back from
+`%TEMP%\opencode-desktop-run\dev.err.log`, then remove the probe. One restart cycle.
+
+The throw now names the payload's top-level keys, so the next shape change is diagnosable
+from the error text alone without re-instrumenting.
+
+**Open oddity, not our bug:** the API reports weekly tokens as
+`34.6M used · 25.4M left · 1%`. Those three are not self-consistent and are passed through
+unmodified. Confirm against the vendor before building anything on `percentUsed`.
+
+**Key availability.** `%APPDATA%\opencode-desktop\byok-keys.json` holds `NANOGPT_API_KEY`
+(plus Groq, Mistral, Cohere, OpenRouter, Cerebras, Moonshot, Gemini). Values look
+`safeStorage`-encrypted, so decrypting them needs to happen inside Electron — a plain node
+script cannot read them, and `process.env.NANOGPT_API_KEY` is unset. The in-app probe above
+is the proven route. Note the image-model discovery endpoints (`/api/v1/image-models`,
+`/api/v1/images/models`) need no key at all and can be curled directly.
+
+---
+
+## 5. Open work
+
+### 5a. Carried forward from wave 2 — none of these were touched
+
+1. **Boot-time NanoGPT key-load race.** On launch `oc:nanogpt:refresh` fails with
+   `No NanoGPT API key is configured` while `oc:nanogpt:balance` succeeds moments later on
+   the same account. Start at `server.ts` `doStart()` and `keys.ts` — the catalog refresh
+   appears to run before the BYOK store is loaded.
+2. **`readCache` / `readCacheSync` duplication** in `nanogptConfig.ts` — extract the shared
+   parse step so only the I/O differs.
+3. **Per-fetch limiter gating.** `refreshCatalogs()` fans out to two fetches that share one
+   limiter slot; true gating means moving `acquireSlot()` into `nanogptConfig.ts`.
+4. **`autoRotate` write is discarded.** `savePrefs` derives it from `routingMode` at
+   `prefs.ts:142`, silently dropping caller-supplied values (`routingSlice.ts:60`). Pinned by
+   a test documenting current behaviour; the fix is owed.
+5. **Stall watchdog can never auto-retry** — `touchActiveAttempt` unconditionally sets
+   `hasStreamed = true`. Possibly intentional; confirm intent before changing.
+6. **`CONTRACTS.md` under-documents `applyEvent`** — four gaps, all now pinned by tests.
+
+### 5b. Release-critical, this wave's leftovers
+
+7. **M1.2 — updater round-trip. Do this first.** `v1.0.2` is the first release with real
+   assets, so this is newly testable and has **zero live evidence** to date. Runbook:
+   `docs/RELEASE_VERIFICATION.md`. `dist/OpenCode-Desktop-0.7.0-setup.exe` is still on disk
+   specifically to serve as the "old" install — delete it once the test is done.
+   Caveat: `updater.ts` sets no `publisherName` and builds are unsigned, so electron-updater
+   *skips* signature verification rather than failing. Updates should install; integrity
+   rests only on the `sha512` in `latest.yml`.
+8. **M1.1 — code signing.** Blocked on buying an OV/EV cert or Azure Trusted Signing, not a
+   code problem. Until then SmartScreen warns every first-time user.
+9. **M8.4 — Dependabot/Renovate**, grouped weekly. Small; the audit gate already catches what
+   it would raise.
+
+### 5c. Quality, highest value first
+
+10. **M2.3 — IPC-boundary tests.** Biggest remaining hole: 84 invoke channels, 59.66% branch
+    coverage, and `ipc.ts` is the whole attack surface. Drive real handlers through a stub
+    `ipcMain`; assert every channel rejects malformed input.
+11. **M2.4 — main files with no tests at all:** `index.ts`, `server.ts`, `tray.ts`,
+    `menu.ts`, `quickEntry.ts`, `liveWindow.ts`. (`updater`, `crashlog`, `nanogptLimiter`,
+    `tokenBudgetTracker` now have tests.)
+12. **M2.1 — Playwright E2E.** `e2e/` does not exist.
+13. **M2.2 — component tests.** `components/__tests__/` does not exist.
+14. **M2.6 — coverage gate at 60%** (just under the current 62.69% so it cannot flake), then
+    ratchet. Do **not** set 65% yet — statements are below it.
+15. **M4.1 — keyboard collision.** `MentionMenu.tsx:66` still registers a global
+    capture-phase `keydown` racing `Chat.tsx` and `Composer.tsx`. Real bug, cheap fix, needs
+    a regression test.
+16. **M3.1 — split `ipc.ts`** (now 1307 lines; it grew). **Only after #10** — refactoring an
+    untested boundary is how a working app breaks.
+
+### Size hotspots
+
+```
+main:       ipc.ts 1307 · gitService.ts 817 · nanogpt.ts 611 · fsService.ts 559 · server.ts 556
+components: SettingsPanel 827 · CommandPalette 707 · MessageView 678 · ProviderPanel 658 · ToolCall 608
+css:        index.css 2166 · messages.css 1713
+```
+
+---
+
+## 6. Subagent deployment
+
+### Fan out only across non-overlapping files. Everything else is sequential.
+
+| Task shape | Model | Notes |
+|---|---|---|
+| Read-only audit, one module each | haiku | 4 in parallel worked well — cheap, fast |
+| Single-file mechanical edit (YAML, config, rename) | haiku | Works, but read its output — see failures below |
+| Multi-file change needing typecheck/test iteration | sonnet | Reliable **when handed evidence**, not asked to find it |
+| Anything touching `package.json` / `package-lock.json` | sonnet, **exactly one** | Never parallel — one lockfile, two writers corrupts it |
+| Judgment: what to do, conflict resolution, verifying claims | main thread | Do not delegate |
+
+### Prompt template that produced good results
+
+```
+Repo: C:\Users\Hp\Dev\opencode-desktop. Do NOT git commit — leave changes in the
+working tree. Do not touch <files another agent owns>.
+
+CONTEXT: <hard evidence already gathered — captured payloads, file:line anchors,
+exact error strings. Never make the agent rediscover these.>
+
+TASK: <numbered, specific, with reasoning for non-obvious choices>
+
+CONSTRAINTS: match surrounding code style and comment density; no `any`; no scope
+creep; if you think <X> should change, report the recommendation instead of doing it.
+
+VERIFY and paste the real output for each:
+  npm run typecheck
+  node scripts/check-contracts.mjs
+  npx vitest run       (baseline 1099/72 — report the real number)
+  npx eslint .         (baseline 0 errors, 89 warnings)
+
+Report: per-file changes, the four verification outputs with real numbers, and
+anything you deliberately did NOT do and why.
+```
+
+Quoting the baselines matters — it converts "tests pass" into a checkable claim.
+
+### Observed failure modes — across both waves, agents report confidently and are sometimes wrong
+
+- **Fabricated a fact in a code comment.** A haiku agent wrote that PRs could "add to the
+  allowlist" for the audit gate. No such mechanism exists. Read every comment an agent
+  writes — comments assert things to future readers.
+- **Solved the wrong problem.** A sonnet agent was asked to fix the NanoGPT error without
+  being given evidence of its cause, and made the parser tolerant instead. The real bug was
+  a total field-name mismatch. See §4.
+- **Claimed "verified" from a file re-read** because its agent type had no shell, and had
+  left an unwanted line behind (wave 2).
+- **Wrote a test that passed for the wrong reason** — asserted a released slot frees a
+  *time*-based window, green only because `runAllTimersAsync` skipped ahead (wave 2).
+- **Reported no API key existed** at a path where one did (wave 2).
+- **Do not delegate mid-rebase.** Conflict state is fragile; resolve on the main thread.
+
+**Always re-run typecheck / tests / lint yourself before committing.** Every agent claim
+this wave was independently re-verified; one was wrong.
+
+### Good first task for a fresh session
+
+Re-audit `ROADMAP.md` against `main` and rewrite it (§3). Three haiku agents in parallel —
+M1/M8, M2, M3/M4 — each told to cite `file:line` and run read-only commands only.
+
+---
+
+## 7. Environment gotchas
+
+**Running the app** — always
+`powershell -File .claude/skills/run-opencode-desktop/driver.ps1 start`. Never a bare
+`npm run dev`. Always `stop` when finished.
+
+- A stale instance silently hijacks the run and leaves the *old* window on screen looking
+  like your build. `start` failed twice this session; the fix was `stop`, `stop` again, then
+  `start`. An orphaned `opencode serve` holding port 4599 survives an electron kill and is
+  the usual cause.
+- `starting electron app...` in `dev.out.log` is **not** the ready signal — wait for
+  `[vite] connected.`.
+- The window can vanish to the tray mid-session (`closeToTray` defaults on); the driver then
+  reports "dev window not found".
+
+**Screenshots and clicking** — `request_access(["electron.exe"])` for the dev build. For a
+**packaged portable** build the exe re-extracts to a fresh `%TEMP%\<random>\` on *every
+launch*, so a prior grant does not carry over — re-request each run or the window is masked.
+Focus is contested: `driver.ps1 shot -KeepTop`, then `focus`, then act, then `release`.
+
+**Driving the UI mutates real state.** `app-settings.json` changed mid-session and I wrongly
+concluded I had caused it. Check the mtime of
+`%APPDATA%\opencode-desktop\app-settings.json` before drawing conclusions, and ask before
+"restoring" any user setting.
+
+**Two constants are duplicated across the process boundary** — `WEEKLY_INPUT_TOKEN_CAP` and
+`DAILY_FREE_IMAGE_CAP` live in both `src/main/` and `src/renderer/src/lib/types.ts`, because
+the renderer cannot import modules pulling in Electron `app` or node `fs`.
+`scripts/check-contracts.mjs` fails the build if they diverge — change both sides. The same
+applies to `NanoUsage`, which is declared in four places.
+
+**All `index.json` mutations must go through `withIndexLock`** in `nanogptImages.ts`. The
+unlocked version lost 3 of 5 concurrent saves.
+
+**Wave-2 module specs** are at `docs/plans/nanogpt-wave2/`; `00-CONTRACT.md` remains the
+reference for the main/preload/renderer seams.
+
+**Shell** — PowerShell on Windows. Write commit messages to a temp file and use
+`git commit -F <file>`; never PowerShell here-strings inside a bash call. No
+`Co-Authored-By` trailers. **`gh` is not installed** — there is no CLI path to creating or
+merging a PR. Push a branch and hand over a compare URL, or merge locally and push.
+
+**Disk** — C: has ~18 GB free. Each `npm run dist:win` writes ~250 MB into `dist/`.
+
+---
+
+## 8. Exact next command
 
 ```bash
-git checkout feat/wave1-coverage && npm test
+git -C C:/Users/Hp/Dev/opencode-desktop log --oneline -3
 ```
 
-`gh` is not installed on this machine — no `gh pr create`. To open a PR, push and use the
-web UI:
-
-```bash
-git push -u origin feat/wave1-coverage
-```
-
-then open `https://github.com/bosscube1/opencode-desktop/compare/main...feat/wave1-coverage`.
-
-## What wave 2 was, in one paragraph
-
-The NanoGPT feature had been built against *guessed* API response shapes. Cross-checking it
-against the vendored reference found four wrong guesses, one of which (the balance response
-shape) meant the balance call had never once succeeded in the feature's entire life — it
-threw every time, and the IPC layer quietly returned a `$0.00` placeholder that was
-indistinguishable from a real empty wallet. Separately, the sync-to-async filesystem
-conversion had introduced a data-loss race: five concurrent image saves persisted two index
-entries. Both are fixed, with the race pinned by a regression test that was watched failing
-first.
-
-## Open follow-ups, highest value first
-
-### 1. Boot-time NanoGPT key-load race (new — found during app verification, not by tests)
-
-On launch, `oc:nanogpt:refresh` failed with `No NanoGPT API key is configured. Add NanoGPT
-under Providers first.` while `oc:nanogpt:balance` succeeded moments later with a real value
-on the same account. Net effect on a healthy, funded account: subscription usage stays null,
-the Settings card reads "No NanoGPT subscription data loaded yet", and the status dot sits
-amber. Pre-existing, not introduced here — it only became *visible* once the balance path
-started working.
-
-Start at `src/main/server.ts` `doStart()` and `src/main/keys.ts`; the catalog refresh appears
-to run before the BYOK key store is loaded.
-
-### 2. `readCache` / `readCacheSync` duplication in `nanogptConfig.ts`
-
-The same copy-paste twin that was fixed in `nanogptImages.ts` — extract the shared parse step
-so only the I/O differs. Left alone because no wave-2 module owned that file.
-
-### 3. Per-fetch limiter gating for the catalog refresh
-
-`refreshCatalogs()` fans out to `fetchSubscriptionModels` and `fetchImageModels` concurrently
-inside `nanogptConfig.ts`. Only the outer call could be wrapped in a limiter slot, so both
-inner fetches share one. True per-fetch gating means moving `acquireSlot()` into
-`nanogptConfig.ts`.
-
-### 4. `autoRotate` write is discarded — still live upstream
-
-`savePrefs` derives `autoRotate` from `routingMode` at `prefs.ts:142`, silently dropping any
-caller-supplied value (see `routingSlice.ts:60`). Confirmed still present in `origin/main`
-despite the commit titled "routing-mode single source of truth". Pinned by a test that
-documents current behaviour; the fix is owed.
-
-### 5. Stall watchdog can never auto-retry
-
-The stall watchdog is only armed via `touchActiveAttempt`, which unconditionally sets
-`hasStreamed = true`, so R1 always blocks a silent retry — only the TTFT watchdog can trigger
-silent failover. Plausibly intentional given R1's side-effect-safety design. Confirm the
-intent before changing anything.
-
-### 6. CONTRACTS.md under-documents `applyEvent`
-
-Four gaps, all contract-thinner-than-reality rather than contradictions: `permission.updated`
-is gated on the active session OR any subagent reachable via `parentID`; failover also
-triggers on `timeout`/`transient`, not only rate-limit; the `MessageAbortedError` user-abort
-vs recovery-abort split is absent; `session.idle` draining `queuedPrompts` into `send()` is
-undocumented. All four are now pinned by tests.
-
-## Things worth knowing before touching this area
-
-- **The NanoGPT API reference is vendored** at
-  `C:\Users\Hp\llm-wiki\raw\# NanoGPT API Documentation Referen.md`. Wave 2 exists because
-  the first pass was written without it. Read it before changing any NanoGPT request or
-  response handling.
-- **Two constants are duplicated across the process boundary.**
-  `WEEKLY_INPUT_TOKEN_CAP` and `DAILY_FREE_IMAGE_CAP` live in both `src/main/` and
-  `src/renderer/src/lib/types.ts`, because the renderer cannot import modules pulling in
-  Electron `app` or node `fs`. `scripts/check-contracts.mjs` fails the build if they diverge —
-  change both sides.
-- **All `index.json` mutations must go through `withIndexLock`** in `nanogptImages.ts`. The
-  unlocked version lost 3 of 5 concurrent saves.
-- **A NanoGPT key exists** at `%APPDATA%\opencode-desktop\byok-keys.json`, so live endpoint
-  probing is possible. The image-model discovery endpoints need no key at all —
-  `/api/v1/image-models` and `/api/v1/images/models` were both probed, both return 200 and
-  the same 217-model catalogue, so the existing path was kept.
-- **Wave-2 module specs are on disk** at `docs/plans/nanogpt-wave2/`. The work is done, but
-  `00-CONTRACT.md` remains the reference for the seams between main, preload and renderer.
-- **Running the app:** `powershell -File .claude/skills/run-opencode-desktop/driver.ps1 start`.
-  Never a bare `npm run dev` — a stale instance silently hijacks the run and shows old code.
-  Always `stop` when finished.
-- **Subagent reports need checking.** In wave 2, one agent reported "verified" from a file
-  re-read because its agent type had no shell, and had left an unwanted line behind; another
-  wrote a test that passed for the wrong reason (it asserted a released slot frees a
-  *time*-based window, and only went green because `runAllTimersAsync` skipped a minute
-  ahead); a third reported no API key existed at a path where one did. All three reports read
-  as confident. Re-run the acceptance checks yourself.
+Confirm `a7ab838` is HEAD and the tree is clean, then start with §5b item 7 — the M1.2
+updater round-trip, following `docs/RELEASE_VERIFICATION.md`. It is the only
+release-critical item that is unblocked, it has never been proven once, and it needs the
+0.7.0 installer currently sitting in `dist/`.
