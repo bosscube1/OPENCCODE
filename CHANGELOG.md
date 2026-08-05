@@ -5,6 +5,48 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-08-05
+
+### Added
+
+- Crash log readout in Settings — `crashlog.ts` wrote `crash.log` but nothing read it back. Two new
+  channels, `oc:crashlog:read` (bounded 64 KiB tail plus metadata, never the whole file, never
+  throws on a missing log) and `oc:crashlog:reveal` (main builds the path itself)
+- `CHANGELOG.md` and `scripts/release.mjs` (`npm run release`) — one step bumps, builds, commits and
+  tags, so the 0.6.0-in-git / 0.7.0-in-dist drift cannot recur
+- CI packaging job — `dist:win:dir` runs on windows-latest for every pull request, catching
+  electron-builder breakage at PR time instead of release time
+- CI supply-chain gate — `npm audit --audit-level=high` fails the build on a new high or critical
+  advisory
+- `docs/RELEASE_VERIFICATION.md`, the manual runbook for an updater round-trip
+
+### Changed
+
+- `@opencode-ai/sdk` 1.18.4 → 1.18.13 (the core dependency, nine patches behind), plus electron
+  43.3.0, `@google/genai` 2.15.0, and the `@typescript-eslint` 8.66 set
+
+### Fixed
+
+- **Three high-severity advisories cleared** — `brace-expansion` (DoS via unbounded expansion),
+  `fast-uri` (host confusion via backslash authority introducer) and `undici` (downstream response
+  desynchronization, plus four related advisories)
+- **NanoGPT subscription usage no longer errors.** The client parsed `daily` and `monthly` buckets
+  the API does not return; the real ones are `dailyInputTokens`, `weeklyInputTokens` and
+  `dailyImages`, with the period boundary at `period.currentPeriodEnd`. Buckets now degrade rather
+  than throw when fields are absent, "no cap" is kept distinct from "unknown", and the panel no
+  longer overflows horizontally
+- **A failed global shortcut no longer kills Quick Entry.** The error names concrete alternatives,
+  the last successfully registered accelerator is restored when a new one fails, and Apply retries
+  registration so recovery needs no restart
+
+### Known issues
+
+- Windows builds are **not code-signed** — SmartScreen will warn on first run. Tracked as ROADMAP
+  M1.1
+- One moderate advisory remains: `dompurify` via `monaco-editor`. The only fix npm offers is a
+  downgrade of monaco from 0.56.0 to 0.53.0; no monaco release at or above 0.56.0 resolves it
+
+
 ## [0.7.0] - 2026-08-04
 
 ### Added
