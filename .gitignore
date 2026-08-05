@@ -43,3 +43,4 @@ desktop.ini
 .cache/
 .vite/
 .eslintcache
+coverage-output.txt
