@@ -1,9 +1,13 @@
-# Release verification runbook — live auto-update round trip (0.6.x → 0.7.0)
+# Release verification runbook — live auto-update round trip
 
-Roadmap item M1.2. The auto-updater has unit tests but has never been round-tripped
-against a real GitHub Release. This runbook is the exact procedure for the repo owner
-(only the owner has push/release credentials). Everything in the pre-flight checklist
-below was verified against the working tree on 2026-08-04.
+Roadmap item M1.2. This runbook is the exact procedure for the repo owner (only the owner
+has push/release credentials).
+
+**Status: PASSED live on 2026-08-05**, on the hop `0.7.0 → 1.0.2` against the real
+`v1.0.2` GitHub Release. See § "Live result" at the end for the evidence and the parts
+that remain unproven. The pre-flight checklist and procedure below are written against
+the earlier `0.6.x → 0.7.0` hop and are kept as the reusable template — substitute the
+current version numbers when running it again.
 
 ## Pre-flight checklist (verified facts)
 
@@ -144,3 +148,33 @@ Rules that matter:
 - If the dialog never appears after "downloaded", the install prompt is single-flight
   (`installPromptOpen`, `src/main/updater.ts:33`) — restart the app; the downloaded
   update is re-offered.
+
+## Live result — 2026-08-05, 0.7.0 → 1.0.2 (PASSED)
+
+Run on the owner's Windows 11 machine against the published `v1.0.2` release.
+
+| Step | Result |
+|------|--------|
+| Unit tests | `src/main/__tests__/updater.test.ts` — 5 passed |
+| Release reachable | `v1.0.2` published (not draft), assets `latest.yml` + setup exe + blockmap |
+| `latest.yml` fidelity | Release asset byte-identical to `dist/latest.yml`: `version: 1.0.2`, `size: 130868428`, `sha512 QuLmc82k…5StIcw==` |
+| Asset fidelity | Locally built exe re-hashed to the same sha512; `HEAD` on the release asset returned `200` / `Content-Length: 130868428` |
+| Check + download | Installed 0.7.0 auto-checked at startup, resolved `latest.yml` on the default `latest` channel, downloaded to `%LOCALAPPDATA%\opencode-desktop-updater\pending\` |
+| sha512 verification | Downloaded file re-hashed independently — matched `latest.yml` exactly. `update-info.json` written with `isAdminRightsRequired: false` |
+| NSIS hand-off | "Install and Restart" → install directory rewritten, updater cache emptied |
+| Relaunch | App relaunched itself; running process and installed exe both report `1.0.2.0` |
+| Re-check | Settings → UPDATES reads "OpenCode Desktop is up to date." |
+
+Close-to-tray did not veto the restart: the tray setting was enabled and the app still
+quit and installed (checklist item 9 holds in practice).
+
+Still unproven after this run:
+
+- **Differential download.** The full 130 MB was fetched; the blockmap delta path did not
+  engage on a 0.7.0 → 1.0.2 hop. A narrower hop is needed to exercise it.
+- **Signature verification.** Skipped, not passed — the builds are unsigned and
+  `publisherName` is unset (L2, M1.1). Integrity rested entirely on the sha512, which did
+  verify.
+- **The dialog itself.** The install was confirmed by its effect (install directory
+  replaced, `autoInstallOnAppQuit` is `false` so nothing else could trigger it), not by an
+  observed screenshot of the prompt.

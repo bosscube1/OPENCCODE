@@ -42,8 +42,8 @@ and the child env (`env.ts:216-226`), `openExternal` protocol check
    (0.6%) — are effectively untested. `ipc.ts` sits at 21% line / **5.8%
    branch**. No E2E, no component tests, no IPC-boundary integration tests.
 2. **Release engineering.** Unsigned builds (SmartScreen will warn every user),
-   updater never round-tripped against a real GitHub Release, no CHANGELOG,
-   no CI packaging job, no coverage or audit gate.
+   no CI packaging job, no coverage or audit gate. (The updater has now been
+   round-tripped live — see 1.2.)
 3. **Concentration.** `ipc.ts` at 1240 lines / 81 channels, `server.ts` at 549
    mixing spawn + event loop + status, `CommandPalette.tsx` at 707,
    `index.css` at ~1900. Each is the single riskiest file in its layer.
@@ -66,7 +66,7 @@ The gap between "it builds" and "a stranger can install it".
 | # | Task | Files |
 |---|---|---|
 | 1.1 | Code-sign Windows builds. Acquire an OV/EV cert; wire `win.certificateFile`/`certificatePassword` (or Azure Trusted Signing) into `electron-builder.yml`; keep the secret out of the repo. Unsigned installers trip SmartScreen for every first-time user. | `electron-builder.yml`, CI secrets |
-| 1.2 | Round-trip the updater for real. Cut a `v0.7.0` GitHub Release, upload setup + `latest.yml` + blockmap, install 0.6.x, confirm it detects, downloads, and applies 0.7.0. This path has unit tests and zero live evidence. | `updater.ts`, GitHub Releases |
+| 1.2 | ~~Round-trip the updater for real.~~ **DONE 2026-08-05** — 0.7.0 → 1.0.2 against the live `v1.0.2` release: detected, downloaded, sha512 verified, NSIS installed, relaunched on 1.0.2, re-check reports up-to-date. Evidence in `docs/RELEASE_VERIFICATION.md` § "Live result". Differential download and signature verification remain unexercised (the latter blocked on 1.1). | `updater.ts`, GitHub Releases |
 | 1.3 | `CHANGELOG.md` + a release script that bumps version, tags, and builds in one step — the 0.6.0-in-git / 0.7.0-in-dist drift found today was a manual-bump artifact. | new `scripts/release.mjs`, `CHANGELOG.md` |
 | 1.4 | CI packaging job: run `dist:win:dir` on windows-latest per PR so packaging breaks are caught at PR time, not release time. | `.github/workflows/ci.yml` |
 | 1.5 | Ship a crash-report surface — `crashlog.ts` writes but nothing reads it back to the user. | `crashlog.ts`, `SettingsPanel.tsx` |

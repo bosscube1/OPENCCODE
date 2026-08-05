@@ -138,13 +138,13 @@ is the proven route. Note the image-model discovery endpoints (`/api/v1/image-mo
 
 ### 5b. Release-critical, this wave's leftovers
 
-7. **M1.2 — updater round-trip. Do this first.** `v1.0.2` is the first release with real
-   assets, so this is newly testable and has **zero live evidence** to date. Runbook:
-   `docs/RELEASE_VERIFICATION.md`. `dist/OpenCode-Desktop-0.7.0-setup.exe` is still on disk
-   specifically to serve as the "old" install — delete it once the test is done.
-   Caveat: `updater.ts` sets no `publisherName` and builds are unsigned, so electron-updater
-   *skips* signature verification rather than failing. Updates should install; integrity
-   rests only on the `sha512` in `latest.yml`.
+7. **M1.2 — updater round-trip. DONE, passed live on 2026-08-05** (0.7.0 → 1.0.2 against the
+   real `v1.0.2` GitHub Release). Evidence and residual gaps are recorded in
+   `docs/RELEASE_VERIFICATION.md` § "Live result". The 0.7.0 artifacts that served as the
+   "old" install have been deleted from `dist/`.
+   Standing caveat: `updater.ts` sets no `publisherName` and builds are unsigned, so
+   electron-updater *skips* signature verification rather than failing. Integrity rests
+   only on the `sha512` in `latest.yml` — which did verify on this run.
 8. **M1.1 — code signing.** Blocked on buying an OV/EV cert or Azure Trusted Signing, not a
    code problem. Until then SmartScreen warns every first-time user.
 9. **M8.4 — Dependabot/Renovate**, grouped weekly. Small; the audit gate already catches what
@@ -293,7 +293,8 @@ merging a PR. Push a branch and hand over a compare URL, or merge locally and pu
 git -C C:/Users/Hp/Dev/opencode-desktop log --oneline -3
 ```
 
-Confirm `a7ab838` is HEAD and the tree is clean, then start with §5b item 7 — the M1.2
-updater round-trip, following `docs/RELEASE_VERIFICATION.md`. It is the only
-release-critical item that is unblocked, it has never been proven once, and it needs the
-0.7.0 installer currently sitting in `dist/`.
+Confirm the tree is clean. §5b item 7 (M1.2 updater round-trip) is **done** — it passed
+live on 2026-08-05, see `docs/RELEASE_VERIFICATION.md` § "Live result". The remaining
+release-critical item, M1.1 code signing, is blocked on buying a cert, so the next
+unblocked work is §5c item 10 — **M2.3 IPC-boundary tests**, the biggest coverage hole
+(84 invoke channels, 59.66% branch coverage, and `ipc.ts` is the whole attack surface).
