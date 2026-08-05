@@ -196,6 +196,24 @@ export type LiveTranscriptMessage = {
   text: string
   at?: number
 }
+
+/** Bounded snapshot of the main-process crash log, from `oc:crashlog:read`. */
+export type CrashLogReport = {
+  /** Absolute path to crash.log ('' when the main process has not initialised it yet). */
+  path: string
+  /** True when crash.log exists (regardless of size). */
+  exists: boolean
+  /** On-disk size of crash.log in bytes (0 when absent). */
+  sizeBytes: number
+  /** True when a rotated crash.log.old exists alongside the active log. */
+  hasOld: boolean
+  /** Entry headers observed in the returned tail — a lower bound once `truncated`. */
+  entryCount: number
+  /** The most recent bytes of crash.log, capped at 64 KiB (see `truncated`). */
+  tail: string
+  /** True when the file was larger than the cap and `tail` is only the end of it. */
+  truncated: boolean
+}
 export type GeminiLiveEvent =
   | { type: 'message'; data: unknown }
   | { type: 'error'; message: string }
@@ -456,6 +474,12 @@ export interface OpencodeApi {
     /** Saves the transcript as markdown under userData/live-transcripts; resolves to the file path. */
     saveTranscript(a: { messages: LiveTranscriptMessage[] }): Promise<string>
     revealTranscripts(): Promise<void>
+  }
+  crashLog: {
+    /** Bounded tail read of the main-process crash log; empty report when no log exists. */
+    read(): Promise<CrashLogReport>
+    /** Reveals crash.log in the OS file manager. Main builds the path itself. */
+    reveal(): Promise<void>
   }
   nanogpt: {
     /** Cached catalogues — no network call. */

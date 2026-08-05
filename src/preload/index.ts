@@ -183,6 +183,24 @@ export type LiveTranscriptMessage = {
   text: string
   at?: number
 }
+
+/** Bounded snapshot of the main-process crash log, from `oc:crashlog:read`. */
+export type CrashLogReport = {
+  /** Absolute path to crash.log ('' when the main process has not initialised it yet). */
+  path: string
+  /** True when crash.log exists (regardless of size). */
+  exists: boolean
+  /** On-disk size of crash.log in bytes (0 when absent). */
+  sizeBytes: number
+  /** True when a rotated crash.log.old exists alongside the active log. */
+  hasOld: boolean
+  /** Entry headers observed in the returned tail — a lower bound once `truncated`. */
+  entryCount: number
+  /** The most recent bytes of crash.log, capped at 64 KiB (see `truncated`). */
+  tail: string
+  /** True when the file was larger than the cap and `tail` is only the end of it. */
+  truncated: boolean
+}
 /* --- NanoGPT (subscription provider + image sidecar) ---------------------- */
 
 export type NanoChatModel = {
@@ -444,6 +462,12 @@ export interface OpencodeApi {
     saveTranscript(a: { messages: LiveTranscriptMessage[] }): Promise<string>
     revealTranscripts(): Promise<void>
   }
+  crashLog: {
+    /** Bounded tail read of the main-process crash log; empty report when no log exists. */
+    read(): Promise<CrashLogReport>
+    /** Reveals crash.log in the OS file manager. Main builds the path itself. */
+    reveal(): Promise<void>
+  }
   nanogpt: {
     /** Cached catalogues — cheap, synchronous in main, no network. */
     models(): Promise<NanogptModelsResult>
@@ -609,6 +633,10 @@ const api: OpencodeApi = {
     onMessage: (cb) => subscribe<GeminiLiveEvent>('oc:live:message', cb),
     saveTranscript: (a) => ipcRenderer.invoke('oc:live:saveTranscript', a),
     revealTranscripts: () => ipcRenderer.invoke('oc:live:transcripts:reveal')
+  },
+  crashLog: {
+    read: () => ipcRenderer.invoke('oc:crashlog:read'),
+    reveal: () => ipcRenderer.invoke('oc:crashlog:reveal')
   },
   nanogpt: {
     models: () => ipcRenderer.invoke('oc:nanogpt:models'),

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { JSX } from 'react'
-import type { NanoUsage, PermissionConfig, UpdateStatus } from '../lib/types'
+import type { CrashLogReport, NanoUsage, PermissionConfig, UpdateStatus } from '../lib/types'
 import { WEEKLY_INPUT_TOKEN_CAP } from '../lib/types'
 import { useStore, errText } from '../lib/store'
 import { FREE_ROUTING_CANDIDATES } from '../lib/rotation'
@@ -211,6 +211,116 @@ function PermissionsCard(): JSX.Element {
       {error !== null && (
         <p role="alert" style={{ fontSize: '11.5px', color: 'var(--danger)', marginBottom: 0 }}>{error}</p>
       )}
+    </div>
+  )
+}
+
+/** Human-readable byte size for the crash-log readout. */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
+}
+
+/** Crash-log readout. Fetches once on mount and on manual refresh — never polled. */
+function CrashLogCard(): JSX.Element {
+  const [report, setReport] = useState<CrashLogReport | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState(false)
+
+  const load = useCallback((): void => {
+    setLoading(true)
+    setError(null)
+    window.api.crashLog
+      .read()
+      .then((result) => setReport(result))
+      .catch((e: unknown) => {
+        setReport(null)
+        setError(errText(e))
+      })
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const hasEntries = report !== null && report.tail.trim().length > 0
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+        <span className="providers__name" style={{ fontSize: '12px' }}>Crash log</span>
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <button type="button" className="providers__key-btn" disabled={loading} onClick={load}>
+            {loading ? 'Loading…' : 'Refresh'}
+          </button>
+          <button
+            type="button"
+            className="providers__key-btn"
+            disabled={report === null || !report.exists}
+            onClick={() => {
+              void window.api.crashLog.reveal()
+            }}
+          >
+            Reveal in folder
+          </button>
+        </div>
+      </div>
+      {loading && report === null ? (
+        <p style={{ fontSize: '12px', color: 'var(--fg-dim)', margin: 0 }}>Loading crash log…</p>
+      ) : error !== null ? (
+        <p role="alert" style={{ fontSize: '12px', color: 'var(--danger)', margin: 0 }}>{error}</p>
+      ) : report !== null && !hasEntries ? (
+        <p style={{ fontSize: '12px', color: 'var(--fg-dim)', margin: 0 }}>No crashes recorded.</p>
+      ) : report !== null ? (
+        <div style={{ fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          <span style={{ color: 'var(--fg-dim)' }}>
+            {report.entryCount} {report.entryCount === 1 ? 'entry' : 'entries'}
+            {report.truncated ? ' (most recent)' : ''} · {formatBytes(report.sizeBytes)}
+            {report.hasOld ? ' · an older rotated log also exists' : ''}
+          </span>
+          <span
+            style={{
+              fontFamily: 'var(--mono)',
+              fontSize: '11px',
+              color: 'var(--fg-dim)',
+              wordBreak: 'break-all'
+            }}
+          >
+            {report.path}
+          </span>
+          <button
+            type="button"
+            className="providers__key-btn"
+            style={{ alignSelf: 'flex-start' }}
+            aria-expanded={expanded}
+            onClick={() => setExpanded((current) => !current)}
+          >
+            {expanded ? 'Hide recent entries' : 'Show recent entries'}
+          </button>
+          {expanded && (
+            <pre
+              style={{
+                margin: 0,
+                padding: '8px',
+                maxHeight: '260px',
+                overflow: 'auto',
+                background: 'var(--bg-sunken)',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius)',
+                fontFamily: 'var(--mono)',
+                fontSize: '11px',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word'
+              }}
+            >
+              {report.tail.trim()}
+            </pre>
+          )}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -641,6 +751,13 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
                 <div><strong>URL:</strong> {server.url || 'N/A'}</div>
                 {server.error && <div><strong>Error:</strong> {server.error}</div>}
               </div>
+            </div>
+          </section>
+
+          <section>
+            <h2 className="providers__group-title">Crash Log</h2>
+            <div className="providers__card">
+              <CrashLogCard />
             </div>
           </section>
 

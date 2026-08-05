@@ -238,6 +238,18 @@ Every handler returns `Promise<T>` and **throws** on failure (renderer catches).
                         // the directory is derived in main, so there is nothing to
                         // validate and no way to point it at an arbitrary location.
 
+// --- Crash log (main's own crash.log in userData, written by src/main/crashlog.ts) ---
+'oc:crashlog:read'   () => CrashLogReport
+                        // BOUNDED tail read: at most the last 64 KiB of crash.log
+                        // (never the whole file), plus metadata (path, sizeBytes,
+                        // hasOld for the rotated crash.log.old, entryCount over the
+                        // returned tail). Missing log returns an empty report — never
+                        // throws.
+'oc:crashlog:reveal' () => void
+                        // shell.showItemInFolder on crash.log. The renderer passes
+                        // NOTHING — main builds the path from crashlog.getCrashLogPath(),
+                        // so there is no way to point it at an arbitrary location.
+
 // --- Gemini Live copilot window (a separate floating BrowserWindow) ---
 'oc:liveWindow:open'           () => void
                         // shows and focuses the floating `#/live` window, creating
@@ -277,6 +289,21 @@ export type ChatSearchScope = 'project' | 'all'
 export type ChatSearchHit = {
   sessionID: string; title: string; messageID: string; snippet: string; time: number
   directory: string // absolute directory the hit came from; always set
+}
+```
+
+`CrashLogReport` (exported from `src/preload/index.ts`, importable by the renderer) — the
+bounded payload of `oc:crashlog:read`:
+
+```ts
+export type CrashLogReport = {
+  path: string        // absolute path to crash.log ('' until main has initialised it)
+  exists: boolean     // crash.log exists (regardless of size)
+  sizeBytes: number   // on-disk size of crash.log (0 when absent)
+  hasOld: boolean     // a rotated crash.log.old exists alongside the active log
+  entryCount: number  // entry headers in the returned tail; a lower bound once truncated
+  tail: string        // most recent bytes of crash.log, capped at 64 KiB
+  truncated: boolean  // true when the file was larger than the cap
 }
 ```
 
@@ -420,6 +447,10 @@ export interface OpencodeApi {
     onMessage(cb: (event: GeminiLiveEvent) => void): () => void
     saveTranscript(a: { messages: LiveTranscriptMessage[] }): Promise<string> // -> saved file path
     revealTranscripts(): Promise<void>
+  }
+  crashLog: {
+    read(): Promise<CrashLogReport>   // bounded tail read; empty report when no log exists
+    reveal(): Promise<void>           // reveals crash.log in the OS file manager (main-owned path)
   }
   nanogpt: {
     /** Cached catalogues — cheap, synchronous in main, no network. */

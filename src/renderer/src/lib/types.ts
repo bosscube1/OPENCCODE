@@ -224,6 +224,24 @@ export type UpdateStatus =
   | { state: 'progress'; percent: number }
   | { state: 'error'; message: string }
 
+/** Bounded snapshot of the main-process crash log, from `oc:crashlog:read`. */
+export type CrashLogReport = {
+  /** Absolute path to crash.log ('' when the main process has not initialised it yet). */
+  path: string
+  /** True when crash.log exists (regardless of size). */
+  exists: boolean
+  /** On-disk size of crash.log in bytes (0 when absent). */
+  sizeBytes: number
+  /** True when a rotated crash.log.old exists alongside the active log. */
+  hasOld: boolean
+  /** Entry headers observed in the returned tail — a lower bound once `truncated`. */
+  entryCount: number
+  /** The most recent bytes of crash.log, capped at 64 KiB (see `truncated`). */
+  tail: string
+  /** True when the file was larger than the cap and `tail` is only the end of it. */
+  truncated: boolean
+}
+
 /**
  * Re-exported as ServerCommand to avoid collision with the DOM `Command` interface.
  * These are project-level slash commands registered on the server.

@@ -39,3 +39,29 @@ jobs:
       # Contract drift check: CONTRACTS.md must cover every IPC channel and
       # window.api method in the code. Plain node, no install needed.
       - run: node scripts/check-contracts.mjs
+
+  # Roadmap M1.4: catch electron-builder packaging breakage at PR time instead
+  # of release time. Runs on pull_request only — packaging is slower than the
+  # check job and nothing per-push is lost, since every merge to main arrives
+  # through a PR. The output is an unpacked win dir (no installer, no publish);
+  # it is not uploaded because an unsigned unpacked dir is not a useful
+  # artifact. CSC_IDENTITY_AUTO_DISCOVERY=false keeps the build explicitly
+  # unsigned: electron-builder otherwise probes for signing material and can
+  # fail on CI where none exists.
+  package:
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - run: npm ci
+
+      - run: npm run dist:win:dir
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'

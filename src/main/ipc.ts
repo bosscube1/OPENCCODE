@@ -38,6 +38,7 @@ import type { LiveWindowController } from './liveWindow'
 import { sendGeminiLive, startGeminiLive, stopGeminiLive, type GeminiLiveInput } from './geminiLive'
 import { saveLiveTranscript, revealTranscriptsFolder } from './liveTranscripts'
 import { nanogptLimiter } from './nanogptLimiter'
+import { getCrashLogPath, readCrashLog, type CrashLogReport } from './crashlog'
 import { markBalanceBilled, readCache, readCacheSync, refreshCatalogs, type RefreshResult } from './nanogptConfig'
 import { tokenBudgetTracker, type WeeklyTokenData } from './tokenBudgetTracker'
 import {
@@ -153,6 +154,8 @@ const CHANNELS = [
   'oc:live:stop',
   'oc:live:saveTranscript',
   'oc:live:transcripts:reveal',
+  'oc:crashlog:read',
+  'oc:crashlog:reveal',
   'oc:nanogpt:models',
   'oc:nanogpt:refresh',
   'oc:nanogpt:usage',
@@ -1270,6 +1273,18 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
     return saveLiveTranscript((args as { messages?: unknown }).messages)
   })
   ipcMain.handle('oc:live:transcripts:reveal', (): void => revealTranscriptsFolder())
+
+  /* ---------------------------------------------------------------- */
+  /* Crash log — bounded read of main's own file; the renderer never   */
+  /* passes a path (main derives it from crashlog.getCrashLogPath()).  */
+  /* ---------------------------------------------------------------- */
+
+  ipcMain.handle('oc:crashlog:read', (): CrashLogReport => readCrashLog())
+
+  ipcMain.handle('oc:crashlog:reveal', (): void => {
+    const logPath = getCrashLogPath()
+    if (logPath) shell.showItemInFolder(logPath)
+  })
 
   /* ---------------------------------------------------------------- */
   /* Phase 1 — fs / git / terminal / editor deep-link (code surface)   */
