@@ -4,9 +4,14 @@ Written 2026-08-05, end of the release-hardening wave. Supersedes the wave-2 han
 (2026-08-04), whose open follow-ups are carried forward in full below — none of them were
 addressed by this wave.
 
-Branch: `main` at `a7ab838`, **pushed**. Tagged `v1.0.2`, **pushed**. GitHub Release
-`v1.0.2` published with all three assets, verified via the API. Working tree clean.
+Branch: `main` at `1a9dd56`, **pushed**. Tagged `v1.0.3`, **pushed**. GitHub Release
+`v1.0.3` published with all four assets, verified via the API. Working tree clean.
 Nothing in flight.
+
+Release/tag drift on the 1.0.3 publish (assets first landed under a stray `v1.0.4`
+release/tag) was **resolved on 2026-08-05** — see `docs/RELEASE_VERIFICATION.md`
+§ "Incident — tag/release drift on the 1.0.3 publish". `/releases/latest` now resolves
+`v1.0.3`; there is no `v1.0.4` tag on either side.
 
 > **Read §4 before touching anything NanoGPT.** The vendored API reference on this machine
 > documents the subscription-usage endpoint incorrectly, and following it is what produced
@@ -18,14 +23,15 @@ Nothing in flight.
 
 | Signal | Value | Re-check with |
 |---|---|---|
-| Version | 1.0.2 — `package.json` and tag agree | `node -p "require('./package.json').version"` |
+| Version | 1.0.3 — `package.json` and tag agree | `node -p "require('./package.json').version"` |
 | Typecheck | clean, node + web | `npm run typecheck` |
-| Tests | **1099 passing / 72 files** | `npx vitest run` |
-| Coverage | **62.69% stmts · 59.66% branch · 65.37% lines** | `npx vitest run --coverage` |
+| Tests | **1505 passing / 84 files** | `npx vitest run` |
+| Coverage | **69.61% stmts · 64.38% branch · 71.08% func · 72.71% lines** | `npx vitest run --coverage` |
+| Coverage gate | thresholds 65/60/65/68 in `vitest.config.ts`, enforced by CI (`npm run test:coverage`) | forced-fail check, M2.6 |
 | Contracts | PASS | `node scripts/check-contracts.mjs` |
 | Lint | 0 errors, 89 warnings | `npx eslint .` |
 | `npm audit` | **0 high** · 1 moderate · 1 low | `npm audit` |
-| Build | `dist/OpenCode-Desktop-1.0.2-{setup,portable}.exe` + `latest.yml` + blockmap | `npm run dist:win` |
+| Build | `dist/OpenCode-Desktop-1.0.3-{setup,portable}.exe` + `latest.yml` + blockmap | `npm run dist:win` |
 | Signing | **NotSigned** | `Get-AuthenticodeSignature dist\*.exe` |
 
 The 89 lint warnings are all `no-explicit-any` and were the pre-existing wave-1 baseline —
@@ -138,13 +144,19 @@ is the proven route. Note the image-model discovery endpoints (`/api/v1/image-mo
 
 ### 5b. Release-critical, this wave's leftovers
 
-7. **M1.2 — updater round-trip. DONE, passed live on 2026-08-05** (0.7.0 → 1.0.2 against the
-   real `v1.0.2` GitHub Release). Evidence and residual gaps are recorded in
-   `docs/RELEASE_VERIFICATION.md` § "Live result". The 0.7.0 artifacts that served as the
-   "old" install have been deleted from `dist/`.
+7. **M1.2 — updater round-trip. DONE, passed live twice on 2026-08-05** — `0.7.0 → 1.0.2`
+   against the `v1.0.2` release, then `1.0.2 → 1.0.3` against the `v1.0.3` release.
+   Evidence and residual gaps are in `docs/RELEASE_VERIFICATION.md` §§ "Live result #1"
+   and "#2". The 0.7.0 artifacts that served as the first "old" install were deleted
+   from `dist/`.
    Standing caveat: `updater.ts` sets no `publisherName` and builds are unsigned, so
    electron-updater *skips* signature verification rather than failing. Integrity rests
-   only on the `sha512` in `latest.yml` — which did verify on this run.
+   only on the `sha512` in `latest.yml` — which verified on both runs.
+   **Still open, one line of work:** the blockmap differential download has never been
+   proven, and cannot be with the current code — `src/main/updater.ts:99` sets
+   `autoUpdater.logger = null`, so the decision is never recorded, and a staged delta is
+   indistinguishable from a full download by file size. Assign a real logger there
+   temporarily and re-run a patch hop to settle it.
 8. **M1.1 — code signing.** Blocked on buying an OV/EV cert or Azure Trusted Signing, not a
    code problem. Until then SmartScreen warns every first-time user.
 9. **M8.4 — Dependabot/Renovate**, grouped weekly. Small; the audit gate already catches what
@@ -304,8 +316,22 @@ merging a PR. Push a branch and hand over a compare URL, or merge locally and pu
 git -C C:/Users/Hp/Dev/opencode-desktop log --oneline -3
 ```
 
-Confirm the tree is clean. §5b item 7 (M1.2 updater round-trip) is **done** — it passed
-live on 2026-08-05, see `docs/RELEASE_VERIFICATION.md` § "Live result". The remaining
-release-critical item, M1.1 code signing, is blocked on buying a cert, so the next
-unblocked work is §5c item 10 — **M2.3 IPC-boundary tests**, the biggest coverage hole
-(84 invoke channels, 59.66% branch coverage, and `ipc.ts` is the whole attack surface).
+Confirm the tree is clean. M1.2 (updater round-trip), M2.3 (IPC-boundary tests), M2.5
+(uiSlice / routingSlice / projectsSlice) and M2.6 (coverage gate) are all **done** — see
+§5b item 7 and `ROADMAP.md`. M1.1 code signing is blocked on buying a cert.
+
+Unblocked work, in order:
+
+1. **Prove or disprove the blockmap differential download** (§5b item 7) — the one
+   remaining untested updater path. Temporarily set `autoUpdater.logger` in
+   `src/main/updater.ts:99`, cut a throwaway patch release, re-run the hop, read the log.
+2. **Finish M2.5.** Remaining low-coverage slices, worst first:
+   `compareSlice.ts` 4.08%, `imagesSlice.ts` 10.34%, `slices/api.ts` 53.84%,
+   `gitSlice.ts` 59.32%. Ratchet the `vitest.config.ts` thresholds up as each lands.
+3. **Validate MCP handler arguments** — `src/main/ipc.ts:777-805` validates
+   `args.directory` but passes `args.name` and `args.config` through unchecked. The M2.3
+   tests pin the current behaviour; they do not make it correct. Recorded in
+   `docs/plans/m2.3-ipc-boundary/SPEC.md` § Findings.
+4. **Decide `feat/p3-code-surface`** — unmerged, 2 commits ahead. `933329c` is preserved
+   by tag `v0.7.0`; only `26f227b` ("WIP: epitaxy pre-switch") would become unreachable,
+   so deletion needs `git branch -D`. Owner's call.

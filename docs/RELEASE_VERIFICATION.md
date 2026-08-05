@@ -3,11 +3,12 @@
 Roadmap item M1.2. This runbook is the exact procedure for the repo owner (only the owner
 has push/release credentials).
 
-**Status: PASSED live on 2026-08-05**, on the hop `0.7.0 → 1.0.2` against the real
-`v1.0.2` GitHub Release. See § "Live result" at the end for the evidence and the parts
-that remain unproven. The pre-flight checklist and procedure below are written against
-the earlier `0.6.x → 0.7.0` hop and are kept as the reusable template — substitute the
-current version numbers when running it again.
+**Status: PASSED live twice on 2026-08-05** — `0.7.0 → 1.0.2` against the `v1.0.2`
+release, then `1.0.2 → 1.0.3` against the `v1.0.3` release. See the two "Live result"
+sections at the end for evidence and the parts that remain unproven. The pre-flight
+checklist and procedure below are written against the earlier `0.6.x → 0.7.0` hop and
+are kept as the reusable template — substitute the current version numbers when running
+it again.
 
 ## Pre-flight checklist (verified facts)
 
@@ -149,7 +150,7 @@ Rules that matter:
   (`installPromptOpen`, `src/main/updater.ts:33`) — restart the app; the downloaded
   update is re-offered.
 
-## Live result — 2026-08-05, 0.7.0 → 1.0.2 (PASSED)
+## Live result #1 — 2026-08-05, 0.7.0 → 1.0.2 (PASSED)
 
 Run on the owner's Windows 11 machine against the published `v1.0.2` release.
 
@@ -178,3 +179,54 @@ Still unproven after this run:
 - **The dialog itself.** The install was confirmed by its effect (install directory
   replaced, `autoInstallOnAppQuit` is `false` so nothing else could trigger it), not by an
   observed screenshot of the prompt.
+
+## Live result #2 — 2026-08-05, 1.0.2 → 1.0.3 (PASSED)
+
+Second round trip on the same machine, this time a single-patch hop, run specifically to
+try to exercise the differential-download path.
+
+| Step | Result |
+|------|--------|
+| `latest.yml` fidelity | Release asset byte-identical to `dist/latest.yml`: `version: 1.0.3`, `size: 130870003`, `sha512 tnAM9s1z…nfrSQ==` |
+| Asset fidelity | Three-way sha512 match: locally built exe = published asset = downloaded file |
+| Check + download | Installed 1.0.2 auto-checked at startup and staged the update, complete ~34 s after launch (vs ~56 s on the 0.7.0 hop) |
+| sha512 verification | Downloaded file re-hashed independently — matched. `update-info.json`: `{"fileName":"OpenCode-Desktop-1.0.3-setup.exe","sha512":"tnAM9s1z…","isAdminRightsRequired":false}` |
+| NSIS hand-off | Install directory rewritten at 19:28:02 |
+| Relaunch | Installed exe and running process both report `1.0.3.0` |
+| Re-check | Settings → UPDATES reads "OpenCode Desktop is up to date." |
+
+Still unproven after this run:
+
+- **Differential download — still not proven, and not provable as the code stands.**
+  The staged file is full-size either way (a delta reconstructs the whole artifact), so
+  size proves nothing, and the faster wall-clock is circumstantial. The only decisive
+  evidence is electron-updater's own log line, and `src/main/updater.ts:99` sets
+  `autoUpdater.logger = null`, so nothing is written. **To settle it:** temporarily
+  assign a logger (e.g. `electron-log`) at that line, re-run a patch hop, and read the
+  differential-download decision out of the log. This is the last unexercised path in
+  the updater.
+- **Signature verification.** Skipped again, not passed — still unsigned (L2, M1.1).
+
+### Incident — tag/release drift on the 1.0.3 publish
+
+The 1.0.3 artifacts were first published under a release named **`v1.0.4`**, while the
+`v1.0.4` tag pointed at the same commit as `v1.0.3` (`1a9dd56`, "chore: release v1.0.3").
+`latest.yml` inside it read `version: 1.0.3`. The updater worked — it trusts `latest.yml`,
+not the tag — but this is the same defect class as the `V1.0.1` incident that
+`scripts/release.mjs` exists to prevent: binaries attached to a tag that does not name
+them.
+
+Resolved on 2026-08-05: the four assets were attached to the `v1.0.3` release, the
+`v1.0.4` tag was deleted locally and on the remote, and the `v1.0.4` release was removed.
+Verified afterwards — `GET /repos/bosscube1/OPENCCODE/releases/latest` resolves `v1.0.3`
+with 4 assets, and `releases/download/v1.0.3/latest.yml` returns `200` and is
+byte-identical to the local build. Commit `1a9dd56` remained reachable throughout via the
+`v1.0.3` tag and `main`.
+
+**Rule for next time:** the release name, the tag, and `version:` inside `latest.yml`
+must all agree before the release is published. Deleting a published release's tag does
+not delete the release — GitHub converts it to a draft that still holds its assets, so
+the release itself has to be deleted separately in the web UI.
+
+Note the GitHub API caches `/releases/latest`; immediately after the fix it still returned
+the stale `v1.0.4`. Re-probe with a cache-busting query before concluding the fix failed.
