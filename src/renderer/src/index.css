@@ -1599,11 +1599,21 @@ body.app--resizing {
 
 .providers__nano-bucket-value {
   font-size: 12px;
+  /* Quota strings can be long ("34.6M used - 25.4M left - 1%"); wrap rather than
+     widen the grid column and push the panel into a horizontal scroll. */
+  overflow-wrap: break-word;
 }
 
 .providers__nano-bucket-reset {
   font-size: 11px;
   color: var(--fg-dim);
+}
+
+.providers__nano-period {
+  font-size: 11px;
+  color: var(--fg-dim);
+  margin: 8px 0 0;
+  overflow-wrap: break-word;
 }
 
 .providers__nano-empty {

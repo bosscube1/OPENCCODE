@@ -233,12 +233,29 @@ export type NanogptRefreshResult = {
   restartRequired: boolean
   fetchedAt: number
 }
+/** Every field is independently optional — NanoGPT's usage endpoint can omit fields per bucket. */
+export type NanoUsageBucket = {
+  used?: number
+  remaining?: number
+  percentUsed?: number
+  resetAt?: number
+}
+/**
+ * Real buckets are `dailyInputTokens`, `weeklyInputTokens`, `dailyImages` — there is no
+ * `monthly` bucket. Each bucket/limit is `| null | undefined`: `null` means "no cap" / "no such
+ * quota" (a known fact), `undefined` means unknown/absent. Period end is `period.currentPeriodEnd`.
+ */
 export type NanoUsage = {
   active: boolean
-  limits: { daily: number; monthly: number }
-  enforceDailyLimit?: boolean
-  daily: { used: number; remaining: number; percentUsed: number; resetAt: number }
-  monthly: { used: number; remaining: number; percentUsed: number; resetAt: number }
+  limits: {
+    dailyInputTokens?: number | null
+    weeklyInputTokens?: number | null
+    dailyImages?: number | null
+  }
+  dailyInputTokens?: NanoUsageBucket | null
+  weeklyInputTokens?: NanoUsageBucket | null
+  dailyImages?: NanoUsageBucket | null
+  period?: { currentPeriodEnd?: string }
   state: string
   graceUntil?: string | null
 }

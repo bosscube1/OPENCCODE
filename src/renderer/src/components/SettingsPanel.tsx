@@ -18,6 +18,15 @@ function toEpochMs(epoch: number): number {
   return epoch < 1e12 ? epoch * 1000 : epoch
 }
 
+/** Render a bucket field honestly: a missing number is `—`, never `NaN`, `undefined`, or a blank that reads as zero. */
+function formatUsageNumber(n: number | undefined): string {
+  return n === undefined ? '—' : formatTokens(n)
+}
+
+function formatUsagePercent(n: number | undefined): string {
+  return n === undefined ? '—' : `${Math.round(n)}%`
+}
+
 /** Subscription quota readout and token accumulator progress. */
 function NanoUsageCard(): JSX.Element {
   const usage = useStore((s) => s.nanoUsage)
@@ -38,13 +47,30 @@ function NanoUsageCard(): JSX.Element {
     }
   }
 
-  const bucket = (label: string, b: NanoUsage['daily']): JSX.Element => (
+  // A bucket that's `null` means "no such quota" — an honest, known fact, distinct from a
+  // missing/malformed bucket (`undefined`), which is genuinely unknown and falls through to the
+  // `—` handling in formatUsageNumber/formatUsagePercent.
+  const bucket = (
+    label: string,
+    b: NanoUsage['dailyInputTokens'],
+    limit: number | null | undefined
+  ): JSX.Element => (
     <div className="providers__nano-bucket">
       <span className="providers__nano-bucket-label">{label}</span>
-      <span className="providers__nano-bucket-value">
-        {formatTokens(b.used)} used · {formatTokens(b.remaining)} left · {Math.round(b.percentUsed)}%
-      </span>
-      <span className="providers__nano-bucket-reset">resets {relativeTime(toEpochMs(b.resetAt))}</span>
+      {b === null && limit === null ? (
+        <span className="providers__nano-bucket-value">No cap</span>
+      ) : b == null ? (
+        <span className="providers__nano-bucket-value">—</span>
+      ) : (
+        <>
+          <span className="providers__nano-bucket-value">
+            {formatUsageNumber(b.used)} used · {formatUsageNumber(b.remaining)} left · {formatUsagePercent(b.percentUsed)}
+          </span>
+          <span className="providers__nano-bucket-reset">
+            resets {b.resetAt === undefined ? '—' : relativeTime(toEpochMs(b.resetAt))}
+          </span>
+        </>
+      )}
     </div>
   )
 
@@ -75,10 +101,18 @@ function NanoUsageCard(): JSX.Element {
       </div>
 
       {usage !== null ? (
-        <div className="providers__nano-buckets">
-          {bucket('Daily', usage.daily)}
-          {bucket('Monthly', usage.monthly)}
-        </div>
+        <>
+          <div className="providers__nano-buckets">
+            {bucket('Daily input tokens', usage.dailyInputTokens, usage.limits.dailyInputTokens)}
+            {bucket('Weekly input tokens', usage.weeklyInputTokens, usage.limits.weeklyInputTokens)}
+            {bucket('Daily images', usage.dailyImages, usage.limits.dailyImages)}
+          </div>
+          {usage.period?.currentPeriodEnd !== undefined ? (
+            <p className="providers__nano-period">
+              Period ends {relativeTime(Date.parse(usage.period.currentPeriodEnd))}
+            </p>
+          ) : null}
+        </>
       ) : (
         <p className="providers__nano-empty">No NanoGPT subscription data loaded yet.</p>
       )}

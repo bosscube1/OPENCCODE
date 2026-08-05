@@ -145,6 +145,55 @@ describe('app settings', () => {
     expect(JSON.parse(readFileSync(path, 'utf8')).version).toBe(APP_SETTINGS_VERSION)
   })
 
+  it('a registration failure leaves a usable, actionable state instead of a dead controller', () => {
+    let conflict = false
+    const shortcut = {
+      register: vi.fn((_accelerator: string, _callback: () => void) => !conflict),
+      unregister: vi.fn((_accelerator: string) => undefined)
+    }
+    const controller = createAppSettingsController({ userDataPath, shortcut, onShortcut: vi.fn() })
+    conflict = true
+
+    const result = controller.set({ globalShortcut: 'Ctrl+Shift+Q' })
+
+    // The controller itself must stay usable: get()/set() keep working, settings are intact.
+    expect(() => controller.get()).not.toThrow()
+    expect(result.settings.globalShortcut).toBe('Ctrl+Shift+Q')
+    // The error names concrete alternatives the user can type into the (already-visible) input.
+    expect(result.shortcutError).toMatch(/Try ".+" or ".+" instead\./)
+
+    // Clicking Apply again with the same (still-failing) value retries rather than no-op'ing.
+    shortcut.register.mockClear()
+    const retried = controller.set({ globalShortcut: 'Ctrl+Shift+Q' })
+    expect(shortcut.register).toHaveBeenCalledWith('Ctrl+Shift+Q', expect.any(Function))
+    expect(retried.shortcutRegistered).toBe(false)
+
+    // And once the offending app releases the combo, the same Apply click recovers.
+    conflict = false
+    const recovered = controller.set({ globalShortcut: 'Ctrl+Shift+Q' })
+    expect(recovered.shortcutRegistered).toBe(true)
+    expect(recovered.shortcutError).toBeUndefined()
+  })
+
+  it('falls back to the last-good accelerator when a replacement fails, instead of leaving neither registered', () => {
+    const working = new Set(['Ctrl+Alt+Space'])
+    const shortcut: GlobalShortcutAdapter = {
+      register: vi.fn((accelerator: string) => working.has(accelerator)),
+      unregister: vi.fn()
+    }
+    const controller = createAppSettingsController({ userDataPath, shortcut, onShortcut: vi.fn() })
+    expect(controller.get().shortcutRegistered).toBe(true)
+
+    const result = controller.set({ globalShortcut: 'Ctrl+Alt+Q' })
+
+    // The requested accelerator is what's persisted/shown, but it did not register...
+    expect(result.settings.globalShortcut).toBe('Ctrl+Alt+Q')
+    expect(result.shortcutRegistered).toBe(false)
+    // ...because the previous, known-working accelerator was re-registered instead of nothing.
+    expect(shortcut.register).toHaveBeenCalledWith('Ctrl+Alt+Space', expect.any(Function))
+    expect(result.shortcutError).toMatch(/Kept the previous shortcut "Ctrl\+Alt\+Space" active/)
+  })
+
   it('unregisters the active shortcut on disposal', () => {
     const shortcut = shortcutAdapter()
     const controller = createAppSettingsController({
