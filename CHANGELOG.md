@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2026-08-05
+
+Continues the 1.0.x line started by the `V1.0.1` tag. The `0.7.0` and `0.7.1` sections below
+describe work that was developed on a branch that had forked before the wave-1 coverage work; it
+never shipped as a release of its own and is included here. Everything in `V1.0.1` is also
+included — the two lines were rebased together, not chosen between.
+
+### Fixed
+
+- **`package.json` now matches the tag.** `V1.0.1` shipped with `"version": "0.6.0"`, so the app
+  reported 0.6.0 and `electron-updater` compared against 0.6.0 — auto-update from that build could
+  not resolve correctly. `scripts/release.mjs` exists to stop this recurring
+- **NanoGPT subscription usage.** `V1.0.1` did not fix this despite conforming other NanoGPT
+  surfaces to the published API: `fetchSubscriptionUsage` still parsed `daily` and `monthly`
+  buckets, which the endpoint does not return, and threw on every call. The real buckets are
+  `dailyInputTokens`, `weeklyInputTokens` and `dailyImages`
+- `StatusBar`'s NanoGPT dot read the removed `daily`/`monthly` percentages. It now takes the worst
+  percentage across the buckets actually reported; an unknown bucket counts as neither headroom nor
+  exhaustion
+
 ## [0.7.1] - 2026-08-05
 
 ### Added
