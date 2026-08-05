@@ -167,9 +167,12 @@ is the proven route. Note the image-model discovery endpoints (`/api/v1/image-mo
     `tokenBudgetTracker` now have tests.)
 12. **M2.1 — Playwright E2E.** `e2e/` does not exist.
 13. **M2.2 — component tests.** `components/__tests__/` does not exist.
-14. **M2.6 — coverage gate.** Statements are now **68.07%** and branches 63.07% (M2.3 moved
-    both), so a 65% statements / 60% branches gate is safe and no longer flaky. The old
-    "do not set 65% yet" note is obsolete.
+14. **M2.6 — coverage gate. DONE 2026-08-05.** Thresholds live in `vitest.config.ts`:
+    statements 65 / branches 60 / functions 65 / lines 68, against measured 68.07 / 63.07
+    / 68.51 / 71.19. CI now runs `npm run test:coverage` instead of `npm run test`, so the
+    gate is enforced rather than merely measurable. Verified in both directions locally —
+    green at the real numbers, and red with the documented error when a threshold is not
+    met. **Ratchet these upward as coverage lands; never lower them to make a build pass.**
 15. **M4.1 — keyboard collision.** `MentionMenu.tsx:66` still registers a global
     capture-phase `keydown` racing `Chat.tsx` and `Composer.tsx`. Real bug, cheap fix, needs
     a regression test.

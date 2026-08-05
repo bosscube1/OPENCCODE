@@ -90,7 +90,7 @@ refactoring `ipc.ts` at 5.8% branch coverage is how a working app breaks.
 | 2.3 | ~~IPC-boundary integration tests.~~ **DONE 2026-08-05** — all 71 registered channels driven through a stub `ipcMain` by 290 tests in 7 files. `ipc.ts` 5.76% → 74.89% branch, 21.27% → 90.9% statements. Harness `ipcHarness.ts`; findings in `docs/plans/m2.3-ipc-boundary/SPEC.md`. | `src/main/__tests__/ipc.*.test.ts` |
 | 2.4 | Cover the zero-coverage lifecycle files: `server.ts` spawn/probe/reap (incl. the Windows `taskkill /T /F` path at `server.ts:197`), `tray.ts`, `menu.ts`, `quickEntry.ts`. | `src/main/__tests__/` |
 | 2.5 | Slice coverage for the <20% offenders: `eventSlice` (0.43%), `compareSlice` (0.68%), `routingSlice` (2.08%), `uiSlice` (3.44%), `projectsSlice` (4%), `imagesSlice` (6.89%), `sessionSlice` (17.58%). | `lib/__tests__/` |
-| 2.6 | CI coverage gate at 65%, ratcheting. | `vitest.config.ts`, `ci.yml` |
+| 2.6 | ~~CI coverage gate at 65%, ratcheting.~~ **DONE 2026-08-05** — `vitest.config.ts` thresholds at statements 65 / branches 60 / functions 65 / lines 68 (measured 68.07 / 63.07 / 68.51 / 71.19), and `ci.yml` now runs `npm run test:coverage` so the gate actually blocks. Ratchet up as coverage lands; never lower to go green. | `vitest.config.ts`, `ci.yml` |
 
 **Exit:** overall coverage ≥65%, no main-process file at 0%, E2E green in CI on
 windows-latest.
