@@ -6,6 +6,7 @@ import { formatCost, formatTokens } from '../lib/format'
 import { isAutoRoutingActive } from '../lib/routing'
 import { SettingsPanel } from './SettingsPanel'
 import type { AppState } from '../lib/slices/types'
+import type { NanoUsage } from '../lib/types'
 
 /** Entry points into the right-hand code surface. Always visible — the panel's own
  *  tab strip is unreachable while the panel is collapsed. */
@@ -29,6 +30,20 @@ function hostLabel(url: string | null): string {
   } catch {
     return url
   }
+}
+
+/**
+ * Highest `percentUsed` across the quota buckets NanoGPT actually reported, driving the status
+ * dot. A bucket that is null (no such quota on this plan) or missing a percentage contributes
+ * nothing — an unknown number must not read as headroom, and it must not read as exhaustion
+ * either, so it is simply not counted. All-unknown yields 0 and the dot stays green, which
+ * matches the pre-existing behaviour of showing OK until a bucket says otherwise.
+ */
+function worstQuotaPercent(usage: NanoUsage): number {
+  return [usage.dailyInputTokens, usage.weeklyInputTokens, usage.dailyImages].reduce<number>(
+    (worst, bucket) => (bucket?.percentUsed === undefined ? worst : Math.max(worst, bucket.percentUsed)),
+    0
+  )
 }
 
 export function StatusBar(): JSX.Element {
@@ -197,11 +212,9 @@ export function StatusBar(): JSX.Element {
             className={
               !nanoUsage
                 ? 'app__dot app__dot--warn'
-                : nanoUsage.daily.percentUsed >= 100 || nanoUsage.monthly.percentUsed >= 100
+                : worstQuotaPercent(nanoUsage) >= 100
                 ? 'app__dot app__dot--bad'
-                : nanoUsage.state === 'grace' ||
-                  nanoUsage.daily.percentUsed >= 80 ||
-                  nanoUsage.monthly.percentUsed >= 80
+                : nanoUsage.state === 'grace' || worstQuotaPercent(nanoUsage) >= 80
                 ? 'app__dot app__dot--warn'
                 : 'app__dot app__dot--ok'
             }

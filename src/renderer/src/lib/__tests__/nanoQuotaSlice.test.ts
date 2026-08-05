@@ -36,11 +36,15 @@ function setup(overrides: Partial<AppState> = {}): { get: GetState; slice: NanoQ
   return { get, slice }
 }
 
+// Mirrors the real `/api/subscription/v1/usage` shape: dailyInputTokens is null on plans with no
+// daily token cap, which is a known fact rather than a missing value.
 const mockUsage: NanoUsage = {
   active: true,
-  limits: { daily: 100, monthly: 3000 },
-  daily: { used: 10, remaining: 90, percentUsed: 10, resetAt: 12345 },
-  monthly: { used: 50, remaining: 2950, percentUsed: 1.6, resetAt: 12345 },
+  limits: { dailyInputTokens: null, weeklyInputTokens: 3000, dailyImages: 100 },
+  dailyInputTokens: null,
+  weeklyInputTokens: { used: 50, remaining: 2950, percentUsed: 1.6, resetAt: 12345 },
+  dailyImages: { used: 10, remaining: 90, percentUsed: 10, resetAt: 12345 },
+  period: { currentPeriodEnd: '2026-09-01T00:00:00.000Z' },
   state: 'active'
 }
 
