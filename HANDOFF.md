@@ -25,9 +25,9 @@ release/tag) was **resolved on 2026-08-05** — see `docs/RELEASE_VERIFICATION.m
 |---|---|---|
 | Version | 1.0.3 — `package.json` and tag agree | `node -p "require('./package.json').version"` |
 | Typecheck | clean, node + web | `npm run typecheck` |
-| Tests | **1505 passing / 84 files** | `npx vitest run` |
-| Coverage | **69.61% stmts · 64.38% branch · 71.08% func · 72.71% lines** | `npx vitest run --coverage` |
-| Coverage gate | thresholds 65/60/65/68 in `vitest.config.ts`, enforced by CI (`npm run test:coverage`) | forced-fail check, M2.6 |
+| Tests | **1584 passing / 86 files** | `npx vitest run` |
+| Coverage | **72.54% stmts · 67.64% branch · 73.83% func · 75.53% lines** | `npx vitest run --coverage` |
+| Coverage gate | thresholds 70/64/70/73 in `vitest.config.ts`, enforced by CI (`npm run test:coverage`) | forced-fail check, M2.6 |
 | Contracts | PASS | `node scripts/check-contracts.mjs` |
 | Lint | 0 errors, 89 warnings | `npx eslint .` |
 | `npm audit` | **0 high** · 1 moderate · 1 low | `npm audit` |
@@ -72,7 +72,7 @@ column without re-checking.
 | M5.1 permission profiles — not started | **Done** — `lib/permissionPresets.ts`, ask/workspace/auto, wired into Settings |
 | M6.2 git status null on non-repo — not started | **Done** — `gitService.ts:416` returns null; branches returns `[]` |
 | M7.3 persist UI state — not started | **Done** — `prefs.ts`, `sessionMeta.ts`, `tips.ts` |
-| M2.5 slice coverage — 0/7 | **Mostly done** — event, session, prefs, nanoQuota, git, editor, agent, subagent, terminal, fileTree covered in earlier waves; `uiSlice`, `routingSlice` and `projectsSlice` all taken to 100% statements *and* 100% branches on 2026-08-05. Still low, measured that day: `compareSlice` 4.08%, `imagesSlice` 10.34%, `api.ts` 30.76%, `gitSlice` 59.32% |
+| M2.5 slice coverage — 0/7 | **Mostly done** — event, session, prefs, nanoQuota, git, editor, agent, subagent, terminal, fileTree covered in earlier waves; `uiSlice`, `routingSlice`, `projectsSlice` and `imagesSlice` all at 100% statements *and* 100% branches, `compareSlice` at 99.31/95.86, as of 2026-08-05. Still low, measured that day: `api.ts` 53.84%, `gitSlice` 59.32%, `compare.ts` 82.35% |
 | M8.1 fix dompurify by bumping monaco to 0.53.0 | **Wrong and harmful.** Tree is already on monaco 0.56.0 (latest stable), which still pins dompurify 3.4.8. `npm audit fix --force` would *downgrade* monaco three minors to "fix" a moderate. Do not run it |
 | Coverage 50.39% / 810 tests / 62 files | 62.69% / 1099 tests / 72 files |
 
@@ -325,9 +325,12 @@ Confirm the tree is clean. M1.2 (updater round-trip), M2.3 (IPC-boundary tests),
 
 Unblocked work, in order:
 
-1. **Finish M2.5.** Remaining low-coverage slices, worst first:
-   `compareSlice.ts` 4.08%, `imagesSlice.ts` 10.34%, `slices/api.ts` 53.84%,
-   `gitSlice.ts` 59.32%. Ratchet the `vitest.config.ts` thresholds up as each lands.
+1. **Finish M2.5.** Remaining low-coverage modules, worst first: `slices/api.ts` 53.84%,
+   `gitSlice.ts` 59.32%, `compare.ts` 82.35%. Ratchet the `vitest.config.ts` thresholds up
+   as each lands — they are now 70/64/70/73 against measured 72.54/67.64/73.83/75.53.
+   Note `compareSlice.ts:346` (`default: return false` in `applyCompareEvent`) is
+   unreachable: `isColumnEvent` admits exactly eight event types and all eight have cases.
+   It is defensive only — do not contort a test to reach it.
 2. **Validate MCP handler arguments** — `src/main/ipc.ts:777-805` validates
    `args.directory` but passes `args.name` and `args.config` through unchecked. The M2.3
    tests pin the current behaviour; they do not make it correct. Recorded in
