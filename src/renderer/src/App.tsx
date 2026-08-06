@@ -11,6 +11,7 @@ import { StatusBar } from './components/StatusBar'
 import { ArtifactsPanel } from './components/ArtifactsPanel'
 import { ProjectView } from './components/ProjectView'
 import { ImagesView } from './components/ImagesView'
+import { HarnessPanel } from './components/HarnessPanel'
 import { FileTree } from './components/FileTree'
 import { EditorPanel } from './components/EditorPanel'
 import { GitPanel } from './components/GitPanel'
@@ -29,14 +30,15 @@ import './index.css'
 type PanelTab = AppState['panelTab']
 
 /** Tab order in the right-hand code-surface panel. */
-const PANEL_TABS = ['files', 'editor', 'changes', 'git', 'terminal', 'artifacts'] as const
+const PANEL_TABS = ['files', 'editor', 'changes', 'git', 'terminal', 'artifacts', 'harness'] as const
 const PANEL_LABELS: Record<(typeof PANEL_TABS)[number], string> = {
   files: 'Files',
   editor: 'Editor',
   changes: 'Changes',
   git: 'Git',
   terminal: 'Terminal',
-  artifacts: 'Artifacts'
+  artifacts: 'Artifacts',
+  harness: 'Harness'
 }
 
 /** localStorage key for the persisted sidebar width. */
@@ -413,12 +415,14 @@ export function App(): JSX.Element {
             boundary — without this the error state outlives the view that threw. */}
         <ErrorBoundary
           key={activeView}
-          label={activeView === 'projects' ? 'Projects' : activeView === 'images' ? 'Images' : 'Chat'}
+          label={activeView === 'projects' ? 'Projects' : activeView === 'images' ? 'Images' : activeView === 'harness' ? 'Harness' : 'Chat'}
         >
           {activeView === 'projects' ? (
             <ProjectView />
           ) : activeView === 'images' ? (
             <ImagesView />
+          ) : activeView === 'harness' ? (
+            <HarnessPanel />
           ) : (
             <Chat />
           )}
@@ -484,6 +488,11 @@ export function App(): JSX.Element {
             {effectivePanelTab === 'artifacts' && (
               <ErrorBoundary label="Artifacts">
                 <ArtifactsPanel />
+              </ErrorBoundary>
+            )}
+            {effectivePanelTab === 'harness' && (
+              <ErrorBoundary label="Harness">
+                <HarnessPanel compact />
               </ErrorBoundary>
             )}
           </div>

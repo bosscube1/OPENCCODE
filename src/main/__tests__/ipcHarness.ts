@@ -137,6 +137,31 @@ function buildMocks() {
     registerTerminal: vi.fn<AnyFn>(),
     registerOpenEditor: vi.fn<AnyFn>(),
 
+    // --- fsService argument guard used by the harness run:start handler ---
+    requireDirectory: vi.fn<AnyFn>((value: unknown) => {
+      if (typeof value !== 'string' || value.trim().length === 0) {
+        throw new Error('Invalid IPC argument: directory must be a non-empty string.')
+      }
+      return value
+    }),
+
+    // --- agentic harness controller (singleton accessor) ---
+    harnessController: {
+      listProfiles: vi.fn<AnyFn>(() => [] as unknown[]),
+      getProfile: vi.fn<AnyFn>(() => null),
+      saveProfile: vi.fn<AnyFn>(async (profile: unknown) => profile),
+      deleteProfile: vi.fn<AnyFn>(async () => true),
+      testProfile: vi.fn<AnyFn>(async () => true),
+      startRun: vi.fn<AnyFn>(async () => 'run-1'),
+      stopRun: vi.fn<AnyFn>(),
+      getRunStatus: vi.fn<AnyFn>(() => null),
+      listRuns: vi.fn<AnyFn>(() => [] as unknown[]),
+      listTools: vi.fn<AnyFn>(() => [] as unknown[]),
+      setEventCallback: vi.fn<AnyFn>()
+    },
+    /** Wired to return `harnessController` in loadIpc unless overridden. */
+    getHarnessController: vi.fn<AnyFn>(),
+
     // --- injected controllers ---
     appSettingsGet: vi.fn<AnyFn>(() => ({ settings: {} })),
     appSettingsSet: vi.fn<AnyFn>(() => ({ settings: {} })),
@@ -159,6 +184,9 @@ export async function loadIpc(
   const mocks = buildMocks()
   for (const [key, value] of Object.entries(overrides)) {
     ;(mocks as Record<string, unknown>)[key] = value
+  }
+  if (!overrides.getHarnessController) {
+    mocks.getHarnessController.mockReturnValue(mocks.harnessController)
   }
 
   const handlers = new Map<string, StubHandler>()
@@ -263,10 +291,11 @@ export async function loadIpc(
     readCrashLog: mocks.readCrashLog,
     getCrashLogPath: mocks.getCrashLogPath
   }))
-  vi.doMock('../fsService', () => ({ register: mocks.registerFs }))
+  vi.doMock('../fsService', () => ({ register: mocks.registerFs, requireDirectory: mocks.requireDirectory }))
   vi.doMock('../gitService', () => ({ register: mocks.registerGit }))
   vi.doMock('../terminal', () => ({ register: mocks.registerTerminal }))
   vi.doMock('../openEditor', () => ({ register: mocks.registerOpenEditor }))
+  vi.doMock('../harness/controller', () => ({ getHarnessController: mocks.getHarnessController }))
   vi.doMock('node:fs/promises', () => ({ writeFile: mocks.writeFile, mkdir: vi.fn(), readdir: vi.fn(), stat: vi.fn(), unlink: vi.fn() }))
 
   const ipc = await import('../ipc')

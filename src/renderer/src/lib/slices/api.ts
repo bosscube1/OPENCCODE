@@ -34,7 +34,11 @@ import type {
   FileDiff,
   GitStatus,
   GitBranch,
-  TermId
+  TermId,
+  AgentProfile,
+  RunStatus,
+  HarnessToolDefinition,
+  HarnessEventPayload
 } from '../types'
 
 export interface OpencodeApi {
@@ -138,6 +142,23 @@ export interface OpencodeApi {
     onExit(cb: (e: { id: TermId; code: number }) => void): () => void
   }
   openEditor(a: { directory: string; path: string; line?: number; column?: number }): Promise<void>
+  harness: {
+    profiles: {
+      list(): Promise<AgentProfile[]>
+      get(id: string): Promise<AgentProfile | null>
+      save(profile: unknown): Promise<AgentProfile>
+      remove(id: string): Promise<boolean>
+      test(id: string): Promise<boolean>
+    }
+    run: {
+      start(params: { profileId: string; task: string; directory: string }): Promise<string>
+      stop(runId: string): Promise<void>
+      status(runId: string): Promise<RunStatus | null>
+      list(): Promise<RunStatus[]>
+    }
+    tools: { list(): Promise<HarnessToolDefinition[]> }
+    onEvent(cb: (payload: HarnessEventPayload) => void): () => void
+  }
   onEvent(cb: (e: OcEvent) => void): () => void
   onServer(cb: (s: ServerStatus) => void): () => void
   onUpdateStatus(cb: (status: UpdateStatus) => void): () => void

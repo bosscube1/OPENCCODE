@@ -1,0 +1,208 @@
+.harness { height: 100%; overflow: auto; padding: 36px clamp(24px, 5vw, 64px) 64px; color: var(--fg); }
+.harness__header { max-width: 1100px; margin: 0 auto 20px; }
+.harness__header h1 { margin: 0; font-family: var(--serif); font-weight: 500; font-size: 32px; }
+.harness__header p { margin: 7px 0 0; color: var(--fg-dim); }
+
+.harness__message {
+  max-width: 1100px;
+  margin: 0 auto 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+.harness__message--error { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+
+.harness__layout {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .harness__layout { grid-template-columns: minmax(0, 1fr); }
+}
+
+.harness__section { min-width: 0; }
+.harness__section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.harness__section-head h2 { margin: 0; font-family: var(--serif); font-weight: 500; font-size: 18px; }
+
+.harness__muted { color: var(--fg-dim); font-size: 12px; }
+
+.harness__btn {
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-alt);
+  color: var(--fg);
+  cursor: pointer;
+}
+.harness__btn:hover:not(:disabled) { background: var(--hover); }
+.harness__btn:disabled { opacity: .55; cursor: default; }
+.harness__btn--primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.harness__btn--primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
+.harness__btn--danger { color: var(--danger); }
+.harness__btn--sm { padding: 3px 9px; font-size: 12px; }
+
+.harness__profiles { list-style: none; margin: 0 0 16px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.harness__profile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-alt);
+}
+.harness__profile-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.harness__profile-name { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.harness__profile-meta { color: var(--fg-dim); font-size: 12px; font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.harness__profile-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+.harness__tag {
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.harness__tag--error { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 55%, var(--border)); }
+
+.harness__editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--card-radius);
+  background: var(--bg-alt);
+}
+.harness__editor-head { display: flex; align-items: center; justify-content: space-between; }
+.harness__editor-head h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.harness__editor-actions { display: flex; gap: 8px; margin-top: 4px; }
+
+.harness__field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--fg-dim); min-width: 0; }
+.harness__field--grow { flex: 1; }
+.harness__field input,
+.harness__field select,
+.harness__field textarea,
+.harness__select,
+.harness__task {
+  font: inherit;
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 7px 10px;
+}
+.harness__field textarea,
+.harness__task { resize: vertical; font-family: var(--sans); }
+.harness__field input:focus,
+.harness__field select:focus,
+.harness__field textarea:focus,
+.harness__select:focus,
+.harness__task:focus { border-color: var(--accent); outline: none; }
+.harness__field input:disabled,
+.harness__field select:disabled,
+.harness__field textarea:disabled { opacity: .65; }
+.harness__field-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.harness__field-row .harness__field { flex: 1; min-width: 110px; }
+
+.harness__check { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--fg); cursor: pointer; }
+.harness__check input { accent-color: var(--accent); }
+
+.harness__tools { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin: 0; }
+.harness__tools legend { font-size: 12px; color: var(--fg-dim); padding: 0 4px; }
+.harness__tools:disabled { opacity: .65; }
+.harness__tools-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 12px; margin-top: 8px; }
+
+.harness__run { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+.harness__run-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.harness__run-status { display: flex; align-items: center; gap: 8px; }
+
+.harness__badge {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 9px;
+  color: var(--fg-dim);
+}
+.harness__badge--running { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.harness__badge--completed { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, var(--border)); }
+.harness__badge--failed { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 55%, var(--border)); }
+.harness__badge--cancelled { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--border)); }
+
+.harness__monitor {
+  height: 420px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--card-radius);
+  background: var(--bg-sunken);
+}
+
+.harness__event { font-size: 13px; line-height: 1.5; }
+.harness__event--text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.harness__event--thinking { color: var(--fg-dim); }
+.harness__event--thinking summary { cursor: pointer; font-style: italic; }
+.harness__event--thinking pre,
+.harness__event--tool pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow: auto;
+}
+.harness__event--tool summary { display: flex; align-items: center; gap: 7px; cursor: pointer; font-family: var(--mono); font-size: 12px; }
+.harness__tool-icon { color: var(--accent); }
+.harness__tool-name { font-weight: 600; }
+.harness__event--error { color: var(--danger); }
+.harness__event--warning { color: var(--warn); }
+.harness__event--done { color: var(--fg-dim); border-top: 1px solid var(--border); padding-top: 8px; }
+
+/* ------------------------------------------------------------------ *
+ * Compact mode — the right-hand code panel is a fixed-width sidebar, so a
+ * viewport media query can never see it. App.tsx gates `harness--compact`
+ * via the `compact` prop; the two-column page layout collapses to one
+ * stacked column (profiles → editor → run controls → monitor).
+ * ------------------------------------------------------------------ */
+.harness--compact { padding: 16px 14px 32px; }
+.harness--compact .harness__header { margin-bottom: 12px; }
+.harness--compact .harness__header h1 { font-size: 22px; }
+.harness--compact .harness__layout { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+.harness--compact .harness__profile { flex-wrap: wrap; }
+.harness--compact .harness__profile-actions { margin-left: auto; }
+.harness--compact .harness__monitor { height: 320px; }

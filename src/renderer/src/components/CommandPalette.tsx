@@ -50,10 +50,11 @@ const ROUTING_LABEL: Record<RoutingMode, string> = {
   failover: 'Failover',
   auto: 'Auto'
 }
-const VIEW_LABEL: Record<'chats' | 'projects' | 'images', string> = {
+const VIEW_LABEL: Record<'chats' | 'projects' | 'images' | 'harness', string> = {
   chats: 'Chats',
   projects: 'Projects',
-  images: 'Images'
+  images: 'Images',
+  harness: 'Harness'
 }
 type PanelTab = NonNullable<AppState['panelTab']>
 const PANEL_LABEL: Record<PanelTab, string> = {
@@ -62,7 +63,8 @@ const PANEL_LABEL: Record<PanelTab, string> = {
   changes: 'Changes',
   git: 'Git',
   terminal: 'Terminal',
-  artifacts: 'Artifacts'
+  artifacts: 'Artifacts',
+  harness: 'Harness'
 }
 
 function commandMatches(cmd: PaletteCommand, query: string): boolean {
@@ -240,7 +242,7 @@ export function CommandPalette(): JSX.Element | null {
       })
     }
 
-    const panelTabs: PanelTab[] = ['files', 'editor', 'changes', 'git', 'terminal', 'artifacts']
+    const panelTabs: PanelTab[] = ['files', 'editor', 'changes', 'git', 'terminal', 'artifacts', 'harness']
     for (const tab of panelTabs) {
       out.push({
         id: `panel:${tab}`,
@@ -321,7 +323,7 @@ export function CommandPalette(): JSX.Element | null {
         }
       })
     }
-    for (const v of ['chats', 'projects', 'images'] as Array<'chats' | 'projects' | 'images'>) {
+    for (const v of ['chats', 'projects', 'images', 'harness'] as Array<'chats' | 'projects' | 'images' | 'harness'>) {
       out.push({
         id: `view:${v}`,
         category: 'View',

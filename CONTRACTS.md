@@ -467,6 +467,23 @@ export interface OpencodeApi {
       today(): Promise<number>
     }
   }
+  harness: {
+    profiles: {
+      list(): Promise<AgentProfile[]>
+      get(id: string): Promise<AgentProfile | null>
+      save(profile: unknown): Promise<AgentProfile>      // validated in main; THROWS on builtin
+      remove(id: string): Promise<boolean>               // -> 'oc:harness:profiles:delete'
+      test(id: string): Promise<boolean>                 // provider connectivity probe
+    }
+    run: {
+      start(a: { profileId: string; task: string; directory: string }): Promise<string> // runId
+      stop(runId: string): Promise<void>
+      status(runId: string): Promise<RunStatus | null>
+      list(): Promise<RunStatus[]>
+    }
+    tools: { list(): Promise<ToolDefinition[]> }
+    onEvent(cb: (e: { runId: string; event: RunnerEvent }) => void): () => void  // returns unsubscribe
+  }
   messages(directory: string, sessionID: string): Promise<MessageWithParts[]>
   revertMessage(a: { directory: string; sessionID: string; messageID: string }): Promise<void>
   unrevertMessage(a: { directory: string; sessionID: string }): Promise<Session>
@@ -1455,6 +1472,209 @@ The reserved 4th `panel` grid column in `.app` becomes a **real, resizable, tabb
 | `monaco-editor` | editor panel | Large bundle; must be lazy-imported and locally bundled — no CDN (the renderer CSP forbids it). |
 | `xterm` + `xterm-addon-fit` | terminal UI | Low. |
 | `node-pty` | terminal backend | **HIGH — native module.** Requires a rebuild against Electron 43 ABI on Windows (ConPTY). This is spiked and go/no-go'd before any terminal UI work is scheduled. Fallback if it fails: a non-interactive `child_process` command runner with streamed output — degraded, but shippable, and the `oc:term:*` contract above is deliberately shaped so the fallback can satisfy it unchanged. |
+
+## Agentic harness (single-agent runner)
+
+A main-process orchestration layer (`src/main/harness/`) that runs self-contained,
+single-agent LLM tasks with tool calling across multiple providers. It runs **alongside** the
+`opencode serve` integration — the serve flow remains the primary chat path; the harness is
+for one-shot agentic task runs, not interactive chat. All state lives in main; the renderer
+talks to it only through the `oc:harness:*` channels below.
+
+Providers are resolved through the `ProviderAdapter` interface
+(`src/main/harness/providers/adapter.ts`); the registry
+(`src/main/harness/providers/registry.ts`) currently supports the provider ids `nanogpt`
+and `google` (Gemini) and **throws on any other id**. Custom profiles persist to
+`userData/harness-profiles.json`; the built-in profiles (`orchestrator`, `researcher`,
+`coder`, `reviewer`) are merged in at read time, are never persisted, and cannot be saved
+over or deleted — clone them first.
+
+### Core types
+
+Transcribed from the harness sources. These types cross IPC, so the preload re-exports
+them (or structurally identical mirrors) for the renderer.
+
+```ts
+// src/main/harness/profiles.ts
+export type AgentProfile = {
+  id: string                       // lowercase [a-z0-9_-], ≤64 chars (validated)
+  name: string
+  description?: string
+
+  // ── Model Selection ──
+  provider: string                 // must be a registry-supported id ('nanogpt' | 'google')
+  model: string
+  fallbackModels?: string[]
+
+  // ── Generation Parameters ──
+  temperature?: number             // 0..2
+  maxTokens?: number               // 1..1_000_000
+  topP?: number                    // 0..1
+  thinking?: { enabled: boolean; budget?: number }
+
+  // ── System Prompt & Persona ──
+  systemPrompt?: string
+  systemPromptFile?: string
+
+  // ── Tool Access ──
+  tools?: string[]                 // tool names; '*' = all
+  toolDenyList?: string[]
+  readOnly?: boolean               // restricts the run to category 'read' tools
+
+  // ── Concurrency & Budget ──
+  maxConcurrent?: number           // 1..50
+  maxTurns?: number                // 1..500; default 50
+  tokenBudget?: number             // input-token hard stop (enforced by AgentRunner)
+  costBudget?: number              // accepted + reserved; NOT yet enforced (no pricing source)
+
+  // ── Routing (NanoGPT only) ──
+  routingSuffix?: string           // ':fast' | ':cheap' | ':speed' | ':price'
+  billingRoute?: 'subscription' | 'standard'
+  caching?: boolean
+
+  // ── Metadata ──
+  builtin?: boolean                // built-ins are read-only
+  createdAt?: number
+  updatedAt?: number
+}
+
+// src/main/harness/tools/registry.ts
+export type ToolDefinition = {
+  name: string
+  description: string
+  parameters: Record<string, unknown>           // JSON Schema object
+  category: 'read' | 'write' | 'shell' | 'web' | 'custom'
+}
+
+// src/main/harness/runner.ts
+export type RunnerEvent =
+  | { type: 'thinking'; content: string }
+  | { type: 'text'; delta: string }
+  | { type: 'tool_call'; name: string; args: Record<string, unknown> }
+  | { type: 'tool_result'; name: string; output: string; error?: string }
+  | { type: 'error'; message: string }
+  | { type: 'done'; result: RunnerResult }
+  | { type: 'budget_warning'; field: string; used: number; limit: number }
+
+export type RunnerResult = {
+  content: string
+  toolCallCount: number
+  usage: { input: number; output: number; reasoning?: number }
+  turns: number
+  finishReason: 'complete' | 'budget_exceeded' | 'max_turns' | 'aborted' | 'error'
+  error?: string
+}
+
+// src/main/harness/controller.ts
+export type RunStatus = {
+  id: string                       // runId (uuid, minted by main on start)
+  profileId: string
+  status: 'running' | 'completed' | 'failed' | 'cancelled'
+  turns: number
+  usage: { input: number; output: number }
+  startedAt: number
+  completedAt?: number
+  result?: RunnerResult
+  error?: string
+}
+```
+
+Built-in tools (registered by `src/main/harness/tools/builtins.ts`):
+
+| Tool | Category | Purpose |
+|---|---|---|
+| `fs_read` | read | Read file contents (contained, 2 MiB cap) |
+| `fs_write` | write | Write file contents (contained) |
+| `fs_list` | read | List directory contents (contained) |
+| `grep` | read | ripgrep search (contained) |
+| `shell` | shell | Execute a command, cwd contained, output capped |
+| `web_search` | web | Web search |
+| `web_fetch` | web | Fetch a URL |
+| `think` | read | Scratchpad — returns its input |
+
+A profile's effective tool set is filtered by `tools` / `toolDenyList` / `readOnly`
+(`ToolRegistry.forProfile`). Custom tools are declared per project under
+`{project}/.opencode/harness/tools/*.json` and surface with category `'custom'`.
+
+### Invoke channels (renderer -> main, `ipcMain.handle`)
+
+```ts
+// --- agentic harness (src/main/harness/, via HarnessController) ---
+'oc:harness:profiles:list'   () => AgentProfile[]       // built-ins + custom merged
+'oc:harness:profiles:get'    (id: string) => AgentProfile | null
+'oc:harness:profiles:save'   (profile: unknown) => AgentProfile
+                             // validated in main (validateProfile); THROWS on a
+                             // profile marked builtin — clone it first.
+'oc:harness:profiles:delete' (id: string) => boolean    // THROWS on a built-in id
+'oc:harness:profiles:test'   (id: string) => boolean
+                             // probes the profile's provider connectivity; false
+                             // for unknown ids or unreachable providers.
+'oc:harness:run:start'       (args: { profileId: string; task: string; directory: string })
+                               => string                 // the runId
+                             // THROWS on unknown profile or unsupported provider.
+'oc:harness:run:stop'        (runId: string) => void    // aborts; no-op if not running
+'oc:harness:run:status'      (runId: string) => RunStatus | null
+'oc:harness:run:list'        () => RunStatus[]
+'oc:harness:tools:list'      () => ToolDefinition[]     // built-ins + project custom tools
+```
+
+### Send channels (main -> renderer, `webContents.send`)
+
+```ts
+'oc:harness:event'  ({ runId: string; event: RunnerEvent })
+                    // every runner event, forwarded verbatim per run; a run always
+                    // terminates in a 'done' (or 'error') event.
+```
+
+### Preload bridge additions (`window.api`)
+
+```ts
+harness: {
+  profiles: {
+    list(): Promise<AgentProfile[]>
+    get(id: string): Promise<AgentProfile | null>
+    save(profile: unknown): Promise<AgentProfile>
+    remove(id: string): Promise<boolean>                 // -> 'oc:harness:profiles:delete'
+    test(id: string): Promise<boolean>
+  }
+  run: {
+    start(a: { profileId: string; task: string; directory: string }): Promise<string> // runId
+    stop(runId: string): Promise<void>
+    status(runId: string): Promise<RunStatus | null>
+    list(): Promise<RunStatus[]>
+  }
+  tools: { list(): Promise<ToolDefinition[]> }
+  onEvent(cb: (e: { runId: string; event: RunnerEvent }) => void): () => void  // returns unsubscribe
+}
+```
+
+### Security invariants — binding, not advisory
+
+1. **Keys never cross IPC.** Provider keys are resolved transiently in main via
+   `loadByokEnv()` (the same encrypted BYOK store as the serve flow) at request time and
+   are handed only to the provider adapter. No key material is ever returned across the
+   bridge, logged, or written to `harness-profiles.json` — the renderer never sees it.
+2. **Path containment.** Filesystem tool executors validate every path with
+   `assertSubpath` from `src/main/projectsPaths.ts` against the run's `directory` — the
+   same containment helper as the rest of the app, not a second check.
+3. **Custom tools are argv-array only.** Tools declared under
+   `{project}/.opencode/harness/tools/*.json` execute via `execFile` argv arrays with
+   `cwd` pinned to the project directory — never a concatenated shell string, never
+   `shell: true`.
+4. **Enforced budgets are hard stops in code.** `maxTurns` and `tokenBudget` are enforced
+   by `AgentRunner` before each turn — they are not instructions to the LLM and cannot be
+   talked past. Exhaustion ends the run with
+   `finishReason: 'budget_exceeded' | 'max_turns'` (plus a `budget_warning` event).
+   `costBudget` is accepted on profiles and reserved for a future pricing data source,
+   but is **not yet enforced** — do not rely on it as a spend cap.
+5. **NanoGPT goes through the existing rate limiter.** Harness NanoGPT requests share the
+   app's rate limiting, so a runaway agent loop cannot hammer the API.
+
+### Deferred follow-ups — do not code against these
+
+The multi-agent DAG orchestrator and the additional provider adapters (`openai-compat`,
+`anthropic`, `opencode-bridge`) are deliberately deferred. The `opencode serve` flow
+remains the primary chat path; the harness does not replace it.
 
 ## Conventions
 

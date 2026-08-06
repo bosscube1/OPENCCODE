@@ -10,7 +10,7 @@ import { getAuthorizedProviderIDs, getClient, getStatus, isAuthorizedProvider, r
 import { getPermissionConfig, setPermissionConfig, validatePermissionConfig, type PermissionConfig } from './configService'
 import { optionalAgentName, optionalToolPolicy } from './promptValidation'
 import { parseSearchOptions, resolveSearchDirectories } from './searchScope'
-import { register as registerFs } from './fsService'
+import { register as registerFs, requireDirectory } from './fsService'
 import { register as registerGit } from './gitService'
 import { register as registerTerminal } from './terminal'
 import { register as registerOpenEditor } from './openEditor'
@@ -60,6 +60,7 @@ import {
   type GeneratedImageMeta
 } from './nanogptImages'
 import { classifyBilling, type ImageBilling } from './nanogptBilling'
+import { getHarnessController } from './harness/controller'
 
 export type MessageWithParts = { info: Message; parts: Part[] }
 export type ProvidersResult = { providers: Provider[]; default: Record<string, string>; linkedProviderIDs: string[] }
@@ -184,7 +185,17 @@ const CHANNELS = [
   'oc:term:kill',
   'oc:openEditor',
   'oc:pickFiles',
-  'oc:clipboard:saveImage'
+  'oc:clipboard:saveImage',
+  'oc:harness:profiles:list',
+  'oc:harness:profiles:get',
+  'oc:harness:profiles:save',
+  'oc:harness:profiles:delete',
+  'oc:harness:profiles:test',
+  'oc:harness:run:start',
+  'oc:harness:run:stop',
+  'oc:harness:run:status',
+  'oc:harness:run:list',
+  'oc:harness:tools:list'
 ] as const
 
 /** Sizes the image endpoint is asked for. An allowlist — `size` is forwarded to a paid API. */
@@ -1285,6 +1296,51 @@ export function registerIpc(options: RegisterIpcOptions = {}): void {
     const logPath = getCrashLogPath()
     if (logPath) shell.showItemInFolder(logPath)
   })
+
+  /* ---------------------------------------------------------------- */
+  /* Agentic harness — profile CRUD, run lifecycle, tool listing.      */
+  /* All work delegates to the HarnessController singleton; the        */
+  /* run:start directory is renderer-supplied, so it is resolved and   */
+  /* must exist as a directory (same guard the fs surface applies).    */
+  /* ---------------------------------------------------------------- */
+
+  ipcMain.handle('oc:harness:profiles:list', () => getHarnessController().listProfiles())
+
+  ipcMain.handle('oc:harness:profiles:get', (_event, idArg: unknown) =>
+    getHarnessController().getProfile(requireString(idArg, 'id')) ?? null
+  )
+
+  ipcMain.handle('oc:harness:profiles:save', (_event, profileArg: unknown) =>
+    getHarnessController().saveProfile(profileArg)
+  )
+
+  ipcMain.handle('oc:harness:profiles:delete', (_event, idArg: unknown) =>
+    getHarnessController().deleteProfile(requireString(idArg, 'id'))
+  )
+
+  ipcMain.handle('oc:harness:profiles:test', (_event, idArg: unknown) =>
+    getHarnessController().testProfile(requireString(idArg, 'id'))
+  )
+
+  ipcMain.handle('oc:harness:run:start', (_event, argsArg: unknown): Promise<string> => {
+    const args = requireObject(argsArg, 'harness run args')
+    const profileId = requireString(args.profileId, 'profileId')
+    const task = requireString(args.task, 'task')
+    const directory = requireDirectory(args.directory, 'directory')
+    return getHarnessController().startRun({ profileId, task, directory })
+  })
+
+  ipcMain.handle('oc:harness:run:stop', (_event, runIdArg: unknown): void => {
+    getHarnessController().stopRun(requireString(runIdArg, 'runId'))
+  })
+
+  ipcMain.handle('oc:harness:run:status', (_event, runIdArg: unknown) =>
+    getHarnessController().getRunStatus(requireString(runIdArg, 'runId')) ?? null
+  )
+
+  ipcMain.handle('oc:harness:run:list', () => getHarnessController().listRuns())
+
+  ipcMain.handle('oc:harness:tools:list', () => getHarnessController().listTools())
 
   /* ---------------------------------------------------------------- */
   /* Phase 1 — fs / git / terminal / editor deep-link (code surface)   */
