@@ -13,6 +13,7 @@
  *   compareSlice   the multi-model fan-out and its own SSE path
  *   subagentSlice  Task-tool child session tabs and their own SSE path
  *   agentSlice     agent registry, per-session agent picker + read-only toggle
+ *   harnessSlice   agentic-harness profiles, runs, and the `oc:harness:event` stream
  *   projectsSlice  projects, app settings, updater status
  *   uiSlice        theme, active view, permissions, error banner, artifact panel
  *   eventSlice     `applyEvent`, the one SSE reducer, composed over all of the above
@@ -34,6 +35,7 @@ import { createEditorSlice } from './slices/editorSlice'
 import { createEventSlice } from './slices/eventSlice'
 import { createFileTreeSlice } from './slices/fileTreeSlice'
 import { createGitSlice } from './slices/gitSlice'
+import { createHarnessSlice } from './slices/harnessSlice'
 import { createProjectsSlice } from './slices/projectsSlice'
 import { createRoutingSlice } from './slices/routingSlice'
 import { createSessionSlice } from './slices/sessionSlice'
@@ -66,6 +68,7 @@ export const useStore = create<AppState>()((set, get) => {
     ...createTerminalSlice(setState, getState),
     ...createEventSlice(setState, getState),
     ...createNanoQuotaSlice(setState, getState),
+    ...createHarnessSlice(setState, getState),
 
     async init(): Promise<void> {
       subscribe()
@@ -172,6 +175,9 @@ function subscribe(): void {
     const bridge = api()
     bridge.onEvent((event) => {
       useStore.getState().applyEvent(event)
+    })
+    bridge.harness.onEvent((payload) => {
+      useStore.getState().handleHarnessEvent(payload)
     })
     bridge.onServer((status) => {
       const prev = useStore.getState().server

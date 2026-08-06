@@ -1,0 +1,716 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { JSX } from 'react'
+import { useStore } from '../lib/store'
+import type { AgentProfile, RunnerResult } from '../lib/types'
+import './HarnessPanel.css'
+
+/** Harness providers supported by the main-process registry (providers/registry.ts). */
+const PROVIDERS = ['nanogpt', 'google'] as const
+
+/** Editor draft: numeric fields stay strings until save, so empty means "unset". */
+type Draft = {
+  id: string
+  name: string
+  description: string
+  provider: string
+  model: string
+  temperature: string
+  maxTokens: string
+  maxTurns: string
+  tokenBudget: string
+  systemPrompt: string
+  readOnly: boolean
+  allTools: boolean
+  tools: string[]
+}
+
+const EMPTY_DRAFT: Draft = {
+  id: '',
+  name: '',
+  description: '',
+  provider: 'nanogpt',
+  model: '',
+  temperature: '',
+  maxTokens: '',
+  maxTurns: '',
+  tokenBudget: '',
+  systemPrompt: '',
+  readOnly: false,
+  allTools: true,
+  tools: []
+}
+
+type TestState = 'testing' | 'ok' | 'fail'
+
+function parseNum(text: string): number | undefined {
+  const trimmed = text.trim()
+  if (trimmed === '') return undefined
+  const value = Number(trimmed)
+  return Number.isFinite(value) ? value : undefined
+}
+
+function draftFrom(profile: AgentProfile): Draft {
+  const tools = profile.tools ?? []
+  return {
+    id: profile.id,
+    name: profile.name,
+    description: profile.description ?? '',
+    provider: profile.provider,
+    model: profile.model,
+    temperature: profile.temperature === undefined ? '' : String(profile.temperature),
+    maxTokens: profile.maxTokens === undefined ? '' : String(profile.maxTokens),
+    maxTurns: profile.maxTurns === undefined ? '' : String(profile.maxTurns),
+    tokenBudget: profile.tokenBudget === undefined ? '' : String(profile.tokenBudget),
+    systemPrompt: profile.systemPrompt ?? '',
+    readOnly: profile.readOnly ?? false,
+    allTools: tools.includes('*'),
+    tools: tools.filter((t) => t !== '*')
+  }
+}
+
+/** `-copy`, then `-copy-2`, … — a clone must never silently overwrite an existing profile. */
+function cloneId(base: string, taken: Set<string>): string {
+  let candidate = `${base}-copy`
+  let n = 2
+  while (taken.has(candidate)) {
+    candidate = `${base}-copy-${n}`
+    n += 1
+  }
+  return candidate
+}
+
+function draftToProfile(draft: Draft): AgentProfile {
+  const profile: AgentProfile = {
+    id: draft.id.trim(),
+    name: draft.name.trim(),
+    provider: draft.provider,
+    model: draft.model.trim()
+  }
+  const description = draft.description.trim()
+  if (description) profile.description = description
+  const temperature = parseNum(draft.temperature)
+  if (temperature !== undefined) profile.temperature = temperature
+  const maxTokens = parseNum(draft.maxTokens)
+  if (maxTokens !== undefined) profile.maxTokens = maxTokens
+  const maxTurns = parseNum(draft.maxTurns)
+  if (maxTurns !== undefined) profile.maxTurns = maxTurns
+  const tokenBudget = parseNum(draft.tokenBudget)
+  if (tokenBudget !== undefined) profile.tokenBudget = tokenBudget
+  const systemPrompt = draft.systemPrompt.trim()
+  if (systemPrompt) profile.systemPrompt = systemPrompt
+  if (draft.readOnly) profile.readOnly = true
+  profile.tools = draft.allTools ? ['*'] : draft.tools.length > 0 ? draft.tools : undefined
+  return profile
+}
+
+/* ------------------------------------------------------------------ *
+ * Run monitor: fold the raw event log into renderable entries,
+ * merging consecutive text deltas into one streaming block.
+ * ------------------------------------------------------------------ */
+
+type MonitorEntry =
+  | { kind: 'text'; text: string }
+  | { kind: 'thinking'; text: string }
+  | { kind: 'tool_call'; name: string; args: Record<string, unknown> }
+  | { kind: 'tool_result'; name: string; output: string; error?: string }
+  | { kind: 'error'; message: string }
+  | { kind: 'warning'; field: string; used: number; limit: number }
+  | { kind: 'done'; result: RunnerResult }
+
+function StatusBadge({ status }: { status: string }): JSX.Element {
+  return <span className={`harness__badge harness__badge--${status}`}>{status}</span>
+}
+
+export function HarnessPanel({ compact = false }: { compact?: boolean }): JSX.Element {
+  const directory = useStore((s) => s.directory)
+  const profiles = useStore((s) => s.harnessProfiles)
+  const tools = useStore((s) => s.harnessTools)
+  const runs = useStore((s) => s.harnessRuns)
+  const activeRunId = useStore((s) => s.harnessActiveRunId)
+  const runEvents = useStore((s) => s.harnessRunEvents)
+  const loading = useStore((s) => s.harnessLoading)
+  const harnessError = useStore((s) => s.harnessError)
+  const loadHarnessProfiles = useStore((s) => s.loadHarnessProfiles)
+  const saveHarnessProfile = useStore((s) => s.saveHarnessProfile)
+  const deleteHarnessProfile = useStore((s) => s.deleteHarnessProfile)
+  const testHarnessProfile = useStore((s) => s.testHarnessProfile)
+  const loadHarnessTools = useStore((s) => s.loadHarnessTools)
+  const startHarnessRun = useStore((s) => s.startHarnessRun)
+  const stopHarnessRun = useStore((s) => s.stopHarnessRun)
+
+  const [draft, setDraft] = useState<Draft | null>(null)
+  /** True while the draft is a built-in profile shown read-only. */
+  const [draftLocked, setDraftLocked] = useState(false)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [testResults, setTestResults] = useState<Record<string, TestState>>({})
+  const [runProfileId, setRunProfileId] = useState('')
+  const [task, setTask] = useState('')
+  const [starting, setStarting] = useState(false)
+
+  const monitorRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    void loadHarnessProfiles()
+    void loadHarnessTools()
+  }, [loadHarnessProfiles, loadHarnessTools])
+
+  const activeRun = useMemo(
+    () => runs.find((run) => run.id === activeRunId) ?? null,
+    [runs, activeRunId]
+  )
+
+  const entries = useMemo<MonitorEntry[]>(() => {
+    const out: MonitorEntry[] = []
+    for (const { runId, event } of runEvents) {
+      if (runId !== activeRunId) continue
+      if (event.type === 'text') {
+        const last = out.at(-1)
+        if (last?.kind === 'text') last.text += event.delta
+        else out.push({ kind: 'text', text: event.delta })
+        continue
+      }
+      if (event.type === 'thinking') {
+        const last = out.at(-1)
+        if (last?.kind === 'thinking') last.text += event.content
+        else out.push({ kind: 'thinking', text: event.content })
+        continue
+      }
+      if (event.type === 'tool_call') out.push({ kind: 'tool_call', name: event.name, args: event.args })
+      else if (event.type === 'tool_result') {
+        out.push({ kind: 'tool_result', name: event.name, output: event.output, error: event.error })
+      } else if (event.type === 'error') out.push({ kind: 'error', message: event.message })
+      else if (event.type === 'budget_warning') {
+        out.push({ kind: 'warning', field: event.field, used: event.used, limit: event.limit })
+      } else if (event.type === 'done') out.push({ kind: 'done', result: event.result })
+    }
+    return out
+  }, [runEvents, activeRunId])
+
+  /* keep the stream pinned to the bottom while it grows */
+  useEffect(() => {
+    const el = monitorRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [entries])
+
+  const patchDraft = (patch: Partial<Draft>): void => {
+    setDraft((prev) => (prev === null ? prev : { ...prev, ...patch }))
+  }
+
+  const openProfile = (profile: AgentProfile): void => {
+    setDraft(draftFrom(profile))
+    setDraftLocked(profile.builtin === true)
+  }
+
+  const cloneDraft = (): void => {
+    if (draft === null) return
+    const taken = new Set(profiles.map((p) => p.id))
+    setDraft({ ...draft, id: cloneId(draft.id, taken), name: `${draft.name} (copy)` })
+    setDraftLocked(false)
+  }
+
+  const cloneProfile = (profile: AgentProfile): void => {
+    const taken = new Set(profiles.map((p) => p.id))
+    const base = draftFrom(profile)
+    setDraft({ ...base, id: cloneId(profile.id, taken), name: `${profile.name} (copy)` })
+    setDraftLocked(false)
+  }
+
+  const saveDraft = async (): Promise<void> => {
+    if (draft === null) return
+    const ok = await saveHarnessProfile(draftToProfile(draft))
+    if (ok) {
+      setDraft(null)
+      setDraftLocked(false)
+    }
+  }
+
+  const runTest = async (id: string): Promise<void> => {
+    setTestResults((prev) => ({ ...prev, [id]: 'testing' }))
+    const ok = await testHarnessProfile(id)
+    setTestResults((prev) => ({ ...prev, [id]: ok ? 'ok' : 'fail' }))
+  }
+
+  const startRun = async (): Promise<void> => {
+    const trimmed = task.trim()
+    if (!runProfileId || !trimmed) return
+    setStarting(true)
+    try {
+      await startHarnessRun(runProfileId, trimmed)
+    } finally {
+      setStarting(false)
+    }
+  }
+
+  const toggleDraftTool = (name: string): void => {
+    if (draft === null) return
+    const next = draft.tools.includes(name)
+      ? draft.tools.filter((t) => t !== name)
+      : [...draft.tools, name]
+    patchDraft({ tools: next })
+  }
+
+  const running = activeRun?.status === 'running'
+
+  return (
+    <div className={compact ? 'harness harness--compact' : 'harness'}>
+      <div className="harness__header">
+        <h1>Harness</h1>
+        <p>Custom agent profiles and single-agent runs with tool calling.</p>
+      </div>
+
+      {harnessError !== null && (
+        <div className="harness__message harness__message--error" role="alert">
+          {harnessError}
+        </div>
+      )}
+
+      <div className="harness__layout">
+        {/* ---- profile list + editor ---- */}
+        <section className="harness__section">
+          <div className="harness__section-head">
+            <h2>Profiles</h2>
+            <button
+              type="button"
+              className="harness__btn"
+              onClick={() => {
+                setDraft(EMPTY_DRAFT)
+                setDraftLocked(false)
+              }}
+            >
+              + New profile
+            </button>
+          </div>
+
+          {loading && profiles.length === 0 ? (
+            <p className="harness__muted">Loading profiles…</p>
+          ) : profiles.length === 0 ? (
+            <p className="harness__muted">No profiles yet.</p>
+          ) : (
+            <ul className="harness__profiles">
+              {profiles.map((profile) => (
+                <li key={profile.id} className="harness__profile">
+                  <button
+                    type="button"
+                    className="harness__profile-main"
+                    onClick={() => openProfile(profile)}
+                    title={profile.description ?? profile.id}
+                  >
+                    <span className="harness__profile-name">
+                      {profile.name}
+                      {profile.builtin === true && (
+                        <span className="harness__tag">built-in</span>
+                      )}
+                    </span>
+                    <span className="harness__profile-meta">
+                      {profile.provider} · {profile.model}
+                    </span>
+                  </button>
+                  <span className="harness__profile-actions">
+                    <button
+                      type="button"
+                      className="harness__btn harness__btn--sm"
+                      disabled={testResults[profile.id] === 'testing'}
+                      onClick={() => void runTest(profile.id)}
+                      title="Probe provider connectivity"
+                    >
+                      {testResults[profile.id] === 'testing'
+                        ? 'Testing…'
+                        : testResults[profile.id] === 'ok'
+                          ? '✓ Reachable'
+                          : testResults[profile.id] === 'fail'
+                            ? '✗ Unreachable'
+                            : 'Test'}
+                    </button>
+                    {profile.builtin === true ? (
+                      <button
+                        type="button"
+                        className="harness__btn harness__btn--sm"
+                        onClick={() => cloneProfile(profile)}
+                      >
+                        Clone
+                      </button>
+                    ) : confirmDeleteId === profile.id ? (
+                      <>
+                        <button
+                          type="button"
+                          className="harness__btn harness__btn--sm harness__btn--danger"
+                          onClick={() => {
+                            setConfirmDeleteId(null)
+                            if (draft?.id === profile.id) setDraft(null)
+                            void deleteHarnessProfile(profile.id)
+                          }}
+                        >
+                          Delete
+                        </button>
+                        <button
+                          type="button"
+                          className="harness__btn harness__btn--sm"
+                          onClick={() => setConfirmDeleteId(null)}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="harness__btn harness__btn--sm harness__btn--danger"
+                        onClick={() => setConfirmDeleteId(profile.id)}
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {draft !== null && (
+            <form
+              className="harness__editor"
+              onSubmit={(e) => {
+                e.preventDefault()
+                if (!draftLocked) void saveDraft()
+              }}
+            >
+              <div className="harness__editor-head">
+                <h3>{draftLocked ? 'Built-in profile (read-only)' : 'Profile editor'}</h3>
+                {draftLocked && (
+                  <button type="button" className="harness__btn harness__btn--sm" onClick={cloneDraft}>
+                    Clone to customize
+                  </button>
+                )}
+              </div>
+
+              <label className="harness__field">
+                <span>ID</span>
+                <input
+                  type="text"
+                  value={draft.id}
+                  disabled={draftLocked}
+                  placeholder="my-agent"
+                  onChange={(e) =>
+                    patchDraft({
+                      // Slugify as typed — validateProfile requires /^[a-z0-9_-]{1,64}$/.
+                      id: e.target.value
+                        .toLowerCase()
+                        .replace(/\s+/g, '-')
+                        .replace(/[^a-z0-9_-]/g, '')
+                        .slice(0, 64)
+                    })
+                  }
+                />
+                <span className="harness__muted">Lowercase letters, digits, hyphens, underscores.</span>
+              </label>
+              <label className="harness__field">
+                <span>Name</span>
+                <input
+                  type="text"
+                  value={draft.name}
+                  disabled={draftLocked}
+                  placeholder="My Agent"
+                  onChange={(e) => patchDraft({ name: e.target.value })}
+                />
+              </label>
+              <label className="harness__field">
+                <span>Description</span>
+                <input
+                  type="text"
+                  value={draft.description}
+                  disabled={draftLocked}
+                  onChange={(e) => patchDraft({ description: e.target.value })}
+                />
+              </label>
+              <div className="harness__field-row">
+                <label className="harness__field">
+                  <span>Provider</span>
+                  <select
+                    value={draft.provider}
+                    disabled={draftLocked}
+                    onChange={(e) => patchDraft({ provider: e.target.value })}
+                  >
+                    {PROVIDERS.map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="harness__field harness__field--grow">
+                  <span>Model</span>
+                  <input
+                    type="text"
+                    value={draft.model}
+                    disabled={draftLocked}
+                    placeholder="google/gemini-2.5-pro"
+                    onChange={(e) => patchDraft({ model: e.target.value })}
+                  />
+                </label>
+              </div>
+              <div className="harness__field-row">
+                <label className="harness__field">
+                  <span>Temperature</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="2"
+                    value={draft.temperature}
+                    disabled={draftLocked}
+                    onChange={(e) => patchDraft({ temperature: e.target.value })}
+                  />
+                </label>
+                <label className="harness__field">
+                  <span>Max tokens</span>
+                  <input
+                    type="number"
+                    min="1"
+                    value={draft.maxTokens}
+                    disabled={draftLocked}
+                    onChange={(e) => patchDraft({ maxTokens: e.target.value })}
+                  />
+                </label>
+                <label className="harness__field">
+                  <span>Max turns</span>
+                  <input
+                    type="number"
+                    min="1"
+                    value={draft.maxTurns}
+                    disabled={draftLocked}
+                    onChange={(e) => patchDraft({ maxTurns: e.target.value })}
+                  />
+                </label>
+                <label className="harness__field">
+                  <span>Token budget</span>
+                  <input
+                    type="number"
+                    min="1"
+                    value={draft.tokenBudget}
+                    disabled={draftLocked}
+                    onChange={(e) => patchDraft({ tokenBudget: e.target.value })}
+                  />
+                </label>
+              </div>
+              <label className="harness__field">
+                <span>System prompt</span>
+                <textarea
+                  rows={4}
+                  value={draft.systemPrompt}
+                  disabled={draftLocked}
+                  onChange={(e) => patchDraft({ systemPrompt: e.target.value })}
+                />
+              </label>
+              <label className="harness__check">
+                <input
+                  type="checkbox"
+                  checked={draft.readOnly}
+                  disabled={draftLocked}
+                  onChange={(e) => patchDraft({ readOnly: e.target.checked })}
+                />
+                Read-only tools only
+              </label>
+
+              <fieldset className="harness__tools" disabled={draftLocked}>
+                <legend>Tools</legend>
+                <label className="harness__check">
+                  <input
+                    type="checkbox"
+                    checked={draft.allTools}
+                    onChange={(e) => patchDraft({ allTools: e.target.checked })}
+                  />
+                  All tools (*)
+                </label>
+                {!draft.allTools && (
+                  <div className="harness__tools-grid">
+                    {tools.map((tool) => (
+                      <label key={tool.name} className="harness__check" title={tool.description}>
+                        <input
+                          type="checkbox"
+                          checked={draft.tools.includes(tool.name)}
+                          onChange={() => toggleDraftTool(tool.name)}
+                        />
+                        {tool.name}
+                        <span className="harness__tag">{tool.category}</span>
+                      </label>
+                    ))}
+                    {tools.length === 0 && (
+                      <span className="harness__muted">No tools registered.</span>
+                    )}
+                  </div>
+                )}
+              </fieldset>
+
+              <div className="harness__editor-actions">
+                {!draftLocked && (
+                  <button
+                    type="submit"
+                    className="harness__btn harness__btn--primary"
+                    disabled={!draft.id.trim() || !draft.name.trim() || !draft.model.trim()}
+                  >
+                    Save profile
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="harness__btn"
+                  onClick={() => {
+                    setDraft(null)
+                    setDraftLocked(false)
+                  }}
+                >
+                  Close
+                </button>
+              </div>
+            </form>
+          )}
+        </section>
+
+        {/* ---- run controls + monitor ---- */}
+        <section className="harness__section">
+          <div className="harness__section-head">
+            <h2>Run</h2>
+          </div>
+
+          {directory === null && (
+            <p className="harness__muted">Open a project folder to start a run.</p>
+          )}
+
+          <div className="harness__run">
+            <select
+              className="harness__select"
+              value={runProfileId}
+              onChange={(e) => setRunProfileId(e.target.value)}
+            >
+              <option value="" disabled>
+                Pick a profile…
+              </option>
+              {profiles.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} ({p.provider}/{p.model})
+                </option>
+              ))}
+            </select>
+            <textarea
+              className="harness__task"
+              rows={3}
+              placeholder="Describe the task for the agent…"
+              value={task}
+              onChange={(e) => setTask(e.target.value)}
+            />
+            <div className="harness__run-actions">
+              <button
+                type="button"
+                className="harness__btn harness__btn--primary"
+                disabled={
+                  starting || running || directory === null || !runProfileId || !task.trim()
+                }
+                onClick={() => void startRun()}
+              >
+                {starting ? 'Starting…' : 'Start run'}
+              </button>
+              <button
+                type="button"
+                className="harness__btn harness__btn--danger"
+                disabled={!running}
+                onClick={() => void stopHarnessRun()}
+              >
+                Stop
+              </button>
+              {activeRun !== null && (
+                <span className="harness__run-status">
+                  <StatusBadge status={activeRun.status} />
+                  <span className="harness__muted">
+                    {activeRun.turns} turn{activeRun.turns === 1 ? '' : 's'} ·{' '}
+                    {activeRun.usage.input} in / {activeRun.usage.output} out
+                  </span>
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="harness__monitor" ref={monitorRef}>
+            {activeRunId === null ? (
+              <p className="harness__muted">No run yet — pick a profile and start one.</p>
+            ) : entries.length === 0 ? (
+              <p className="harness__muted">Waiting for the agent…</p>
+            ) : (
+              entries.map((entry, i) => {
+                if (entry.kind === 'text') {
+                  return (
+                    <div key={i} className="harness__event harness__event--text">
+                      {entry.text}
+                    </div>
+                  )
+                }
+                if (entry.kind === 'thinking') {
+                  return (
+                    <details key={i} className="harness__event harness__event--thinking">
+                      <summary>Thinking…</summary>
+                      <pre>{entry.text}</pre>
+                    </details>
+                  )
+                }
+                if (entry.kind === 'tool_call') {
+                  return (
+                    <details key={i} className="harness__event harness__event--tool">
+                      <summary>
+                        <span className="harness__tool-icon" aria-hidden="true">
+                          ⚙
+                        </span>
+                        <span className="harness__tool-name">{entry.name}</span>
+                      </summary>
+                      <pre>{JSON.stringify(entry.args, null, 2)}</pre>
+                    </details>
+                  )
+                }
+                if (entry.kind === 'tool_result') {
+                  return (
+                    <details
+                      key={i}
+                      className={
+                        entry.error
+                          ? 'harness__event harness__event--tool harness__event--error'
+                          : 'harness__event harness__event--tool'
+                      }
+                    >
+                      <summary>
+                        <span className="harness__tool-icon" aria-hidden="true">
+                          ⤷
+                        </span>
+                        <span className="harness__tool-name">{entry.name}</span>
+                        {entry.error && <span className="harness__tag harness__tag--error">error</span>}
+                      </summary>
+                      <pre>{entry.error ? `${entry.error}\n${entry.output}` : entry.output}</pre>
+                    </details>
+                  )
+                }
+                if (entry.kind === 'error') {
+                  return (
+                    <div key={i} className="harness__event harness__event--error">
+                      {entry.message}
+                    </div>
+                  )
+                }
+                if (entry.kind === 'warning') {
+                  return (
+                    <div key={i} className="harness__event harness__event--warning">
+                      Budget warning: {entry.field} used {entry.used} of {entry.limit}
+                    </div>
+                  )
+                }
+                return (
+                  <div key={i} className="harness__event harness__event--done">
+                    Done — {entry.result.finishReason} · {entry.result.turns} turns ·{' '}
+                    {entry.result.toolCallCount} tool calls · {entry.result.usage.input} in /{' '}
+                    {entry.result.usage.output} out
+                    {entry.result.error ? ` · ${entry.result.error}` : ''}
+                  </div>
+                )
+              })
+            )}
+          </div>
+        </section>
+      </div>
+    </div>
+  )
+}

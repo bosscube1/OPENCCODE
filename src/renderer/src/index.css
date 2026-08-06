@@ -2164,3 +2164,50 @@ body.app--resizing {
   font-size: 11.5px;
   color: var(--fg);
 }
+
+/* --------------------------------------------------------------------------
+   Accessibility: prefers-reduced-motion
+   -------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .app {
+    transition: none;
+  }
+
+  .app__resizer::after {
+    transition: none;
+  }
+
+  .sidebar__btn {
+    transition: none;
+  }
+
+  .sidebar__session {
+    transition: none;
+  }
+
+  .sidebar__del {
+    transition: none;
+  }
+
+  .sidebar__nav-item {
+    transition: none;
+  }
+
+  .modelpicker__trigger {
+    transition: none;
+  }
+
+  .providers,
+  .providers__panel {
+    animation: none;
+  }
+
+  .sidebar__subagent-spinner {
+    animation: none;
+  }
+
+  .app__spinner {
+    animation: none;
+  }
+}

@@ -1,3 +1,5 @@
+import { appendFileSync, mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { app, BrowserWindow, dialog } from 'electron'
 import updaterPackage, {
   type ProgressInfo,
@@ -34,6 +36,47 @@ let installPromptOpen = false
 
 function emit(status: UpdateStatus): void {
   statusSink?.(status)
+}
+
+/**
+ * Opt-in updater log, off unless `OPENCODE_UPDATER_LOG` is set to a writable path.
+ *
+ * electron-updater's own diagnostics are the only evidence for whether a download took the
+ * blockmap differential path — a delta reconstructs the full artifact, so the staged file is
+ * byte-identical in size to a full download and proves nothing. The logger stays null by
+ * default because these lines carry update URLs and local paths; enable it deliberately.
+ *
+ * `OPENCODE_UPDATER_LOG=<path>` then read the file after a check. Look for
+ * "Download block maps", and either "Differential download is not possible" (fell back to a
+ * full download, with the reason) or the percent-saved line (delta succeeded).
+ */
+function createUpdaterLogger(): typeof autoUpdater.logger {
+  const target = process.env.OPENCODE_UPDATER_LOG
+  if (!target) return null
+
+  let write: (level: string, args: unknown[]) => void
+  try {
+    mkdirSync(dirname(target), { recursive: true })
+    write = (level, args) => {
+      const line = args
+        .map((a) => (a instanceof Error ? (a.stack ?? a.message) : String(a)))
+        .join(' ')
+      try {
+        appendFileSync(target, `[${new Date().toISOString()}] ${level} ${line}\n`)
+      } catch {
+        // A broken log must never break the update itself.
+      }
+    }
+  } catch {
+    return null
+  }
+
+  return {
+    info: (...args: unknown[]) => write('info', args),
+    warn: (...args: unknown[]) => write('warn', args),
+    error: (...args: unknown[]) => write('error', args),
+    debug: (...args: unknown[]) => write('debug', args)
+  } as unknown as typeof autoUpdater.logger
 }
 
 function safeVersion(version: unknown): string {
@@ -96,7 +139,7 @@ export function setupUpdater(sink: StatusSink, options: UpdaterOptions = {}): vo
   // Download may be automatic, but installation is always a separate user decision.
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = false
-  autoUpdater.logger = null
+  autoUpdater.logger = createUpdaterLogger()
 
   addListener('checking-for-update', () => emit({ state: 'checking' }))
   addListener('update-not-available', () => emit({ state: 'not-available' }))

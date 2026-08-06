@@ -18,6 +18,7 @@ import { setupLiveWindow, type LiveWindowController } from './liveWindow'
 import { setupTray, type TrayController } from './tray'
 import { checkForUpdates, cleanupUpdater, setupUpdater, type UpdateStatus } from './updater'
 import { getStatus, onEvent, onStatus, startServer, stopServer, type ServerStatus } from './server'
+import { getHarnessController } from './harness/controller'
 
 const moduleDir = dirname(fileURLToPath(import.meta.url))
 const rendererDevUrl = process.env.ELECTRON_RENDERER_URL
@@ -81,7 +82,7 @@ function resolveResource(name: string): string {
 /* renderer messaging                                                  */
 /* ------------------------------------------------------------------ */
 
-function broadcast(channel: 'oc:event' | 'oc:server', payload: unknown): void {
+function broadcast(channel: 'oc:event' | 'oc:server' | 'oc:harness:event', payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue
     const contents = win.webContents
@@ -252,6 +253,10 @@ if (!allowDevelopmentInstance && !app.requestSingleInstanceLock()) {
 
   onEvent((event) => {
     broadcast('oc:event', event)
+  })
+
+  getHarnessController().setEventCallback((runId, event) => {
+    broadcast('oc:harness:event', { runId, event })
   })
 
   onStatus((serverStatus: ServerStatus) => {

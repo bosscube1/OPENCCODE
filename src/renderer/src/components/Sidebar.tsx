@@ -224,6 +224,7 @@ export function Sidebar({ onOpenLiveScreen }: { onOpenLiveScreen?: () => void })
             <button type="button" className={activeView === 'chats' ? 'sidebar__nav-item sidebar__nav-item--active' : 'sidebar__nav-item'} onClick={() => setActiveView('chats')}>Chats</button>
             <button type="button" className={activeView === 'projects' ? 'sidebar__nav-item sidebar__nav-item--active' : 'sidebar__nav-item'} onClick={() => setActiveView('projects')}>Projects</button>
             <button type="button" className={activeView === 'images' ? 'sidebar__nav-item sidebar__nav-item--active' : 'sidebar__nav-item'} onClick={() => setActiveView('images')}>Images</button>
+            <button type="button" className={activeView === 'harness' ? 'sidebar__nav-item sidebar__nav-item--active' : 'sidebar__nav-item'} onClick={() => setActiveView('harness')}>Harness</button>
             <button type="button" className="sidebar__nav-item" onClick={onOpenLiveScreen}>Live screen</button>
           </div>
 
@@ -265,6 +266,7 @@ export function Sidebar({ onOpenLiveScreen }: { onOpenLiveScreen?: () => void })
             <button type="button" className={activeView === 'chats' ? 'sidebar__nav-item sidebar__nav-item--active' : 'sidebar__nav-item'} onClick={() => setActiveView('chats')}>Chats</button>
             <button type="button" className={activeView === 'projects' ? 'sidebar__nav-item sidebar__nav-item--active' : 'sidebar__nav-item'} onClick={() => setActiveView('projects')}>Projects</button>
             <button type="button" className={activeView === 'images' ? 'sidebar__nav-item sidebar__nav-item--active' : 'sidebar__nav-item'} onClick={() => setActiveView('images')}>Images</button>
+            <button type="button" className={activeView === 'harness' ? 'sidebar__nav-item sidebar__nav-item--active' : 'sidebar__nav-item'} onClick={() => setActiveView('harness')}>Harness</button>
             <button type="button" className="sidebar__nav-item" onClick={onOpenLiveScreen}>Live screen</button>
           </div>
 

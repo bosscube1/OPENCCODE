@@ -32,7 +32,11 @@ import type {
   TermId,
   NanoUsage,
   NanoBalance,
-  WeeklyTokenData
+  WeeklyTokenData,
+  AgentProfile,
+  RunStatus,
+  HarnessToolDefinition,
+  HarnessEventPayload
 } from '../types'
 
 export interface AppState {
@@ -76,7 +80,7 @@ export interface AppState {
   queuedPrompts: Array<{ text: string, parts?: PromptPart[] }>
   serverCommands: ServerCommand[]
   projects: ProjectRecord[]
-  activeView: 'chats' | 'projects' | 'images'
+  activeView: 'chats' | 'projects' | 'images' | 'harness'
   appSettings: AppSettings
   shortcutRegistered: boolean
   shortcutError: string | null
@@ -152,6 +156,33 @@ export interface AppState {
   /** Toggle a session's read-only tool policy. */
   setSessionReadOnly(sessionID: string, readOnly: boolean): void
 
+  /* ---- agentic harness: profiles, runs, live event stream ---- */
+  /** All agent profiles (built-in + custom), from `oc:harness:profiles:list`. */
+  harnessProfiles: AgentProfile[]
+  /** Registered harness tools, from `oc:harness:tools:list`. */
+  harnessTools: HarnessToolDefinition[]
+  /** The run the monitor is following, or null. */
+  harnessActiveRunId: string | null
+  /** Known runs, newest first. Status updates arrive via `handleHarnessEvent`. */
+  harnessRuns: RunStatus[]
+  /** Bounded live event log across runs (capped — see harnessSlice). */
+  harnessRunEvents: HarnessEventPayload[]
+  harnessLoading: boolean
+  /** Harness-local error text (the global `error` banner stays chat-scoped). */
+  harnessError: string | null
+  loadHarnessProfiles(): Promise<void>
+  /** Saves via main (validated there) and refreshes the list. False on failure. */
+  saveHarnessProfile(profile: unknown): Promise<boolean>
+  deleteHarnessProfile(id: string): Promise<void>
+  /** Provider connectivity probe; false when unreachable or the call failed. */
+  testHarnessProfile(id: string): Promise<boolean>
+  loadHarnessTools(): Promise<void>
+  /** Starts a run in the active project directory and makes it the monitored one. */
+  startHarnessRun(profileId: string, task: string): Promise<void>
+  stopHarnessRun(): Promise<void>
+  /** The `oc:harness:event` reducer: appends to the log, folds done/error into runs. */
+  handleHarnessEvent(payload: HarnessEventPayload): void
+
   // actions
   init(): Promise<void>
   pickDirectory(): Promise<void>
@@ -159,7 +190,7 @@ export interface AppState {
   loadProjects(): Promise<void>
   createProject(name: string): Promise<ProjectRecord>
   openProject(project: ProjectRecord): Promise<void>
-  setActiveView(view: 'chats' | 'projects' | 'images'): void
+  setActiveView(view: 'chats' | 'projects' | 'images' | 'harness'): void
   loadAppSettings(): Promise<void>
   updateAppSettings(patch: Partial<AppSettings>): Promise<void>
   setUpdateStatus(status: UpdateStatus): void
@@ -267,7 +298,7 @@ export interface AppState {
   killTerminal(id: TermId): Promise<void>
 
   // ui slice — panel additions
-  panelTab: 'files' | 'editor' | 'git' | 'terminal' | 'artifacts' | 'changes' | null
+  panelTab: 'files' | 'editor' | 'git' | 'terminal' | 'artifacts' | 'changes' | 'harness' | null
   setPanelTab(tab: AppState['panelTab']): void
   paletteOpen: boolean
   setPaletteOpen(open: boolean): void

@@ -66,15 +66,15 @@ The gap between "it builds" and "a stranger can install it".
 | # | Task | Files |
 |---|---|---|
 | 1.1 | Code-sign Windows builds. Acquire an OV/EV cert; wire `win.certificateFile`/`certificatePassword` (or Azure Trusted Signing) into `electron-builder.yml`; keep the secret out of the repo. Unsigned installers trip SmartScreen for every first-time user. | `electron-builder.yml`, CI secrets |
-| 1.2 | ~~Round-trip the updater for real.~~ **DONE 2026-08-05** — 0.7.0 → 1.0.2 against the live `v1.0.2` release: detected, downloaded, sha512 verified, NSIS installed, relaunched on 1.0.2, re-check reports up-to-date. Evidence in `docs/RELEASE_VERIFICATION.md` § "Live result". Differential download and signature verification remain unexercised (the latter blocked on 1.1). | `updater.ts`, GitHub Releases |
+| 1.2 | ~~Round-trip the updater for real.~~ **DONE 2026-08-05, twice** — `0.7.0 → 1.0.2` against the live `v1.0.2` release, then `1.0.2 → 1.0.3` against `v1.0.3`. Both hops: detected, downloaded, sha512 verified, NSIS installed, relaunched on the new version, re-check reports up-to-date. Evidence in `docs/RELEASE_VERIFICATION.md` §§ "Live result #1"/"#2". Signature verification remains unexercised (blocked on 1.1). Differential download is **not provable as the code stands** — `updater.ts:99` nulls the logger; assign one temporarily to settle it. | `updater.ts`, GitHub Releases |
 | 1.3 | `CHANGELOG.md` + a release script that bumps version, tags, and builds in one step — the 0.6.0-in-git / 0.7.0-in-dist drift found today was a manual-bump artifact. | new `scripts/release.mjs`, `CHANGELOG.md` |
 | 1.4 | CI packaging job: run `dist:win:dir` on windows-latest per PR so packaging breaks are caught at PR time, not release time. | `.github/workflows/ci.yml` |
 | 1.5 | Ship a crash-report surface — `crashlog.ts` writes but nothing reads it back to the user. | `crashlog.ts`, `SettingsPanel.tsx` |
 
 **Exit:** a **signed** installer on a clean VM installs, launches, and auto-updates to
 the next patch release without a manual download. The unsigned half of this was proven
-on 2026-08-05 (0.7.0 → 1.0.2, see 1.2); only the signing requirement is outstanding,
-blocked on 1.1.
+on 2026-08-05 across two consecutive hops (0.7.0 → 1.0.2 → 1.0.3, see 1.2); only the
+signing requirement is outstanding, blocked on 1.1.
 
 ---
 
@@ -89,7 +89,7 @@ refactoring `ipc.ts` at 5.8% branch coverage is how a working app breaks.
 | 2.2 | Component tests via React Testing Library on the five densest components: `CommandPalette`, `Composer`, `MessageView`, `ToolCall`, `ChangesPanel`. | `src/renderer/src/components/__tests__/` |
 | 2.3 | ~~IPC-boundary integration tests.~~ **DONE 2026-08-05** — all 71 registered channels driven through a stub `ipcMain` by 290 tests in 7 files. `ipc.ts` 5.76% → 74.89% branch, 21.27% → 90.9% statements. Harness `ipcHarness.ts`; findings in `docs/plans/m2.3-ipc-boundary/SPEC.md`. | `src/main/__tests__/ipc.*.test.ts` |
 | 2.4 | Cover the zero-coverage lifecycle files: `server.ts` spawn/probe/reap (incl. the Windows `taskkill /T /F` path at `server.ts:197`), `tray.ts`, `menu.ts`, `quickEntry.ts`. | `src/main/__tests__/` |
-| 2.5 | Slice coverage for the <20% offenders. **Mostly done 2026-08-05:** `uiSlice` 3.44% → **100/100**, `routingSlice` 2.08% → **100/100**, `projectsSlice` 4% → **100/100** (statements/branches); `sessionSlice` and `eventSlice` were covered in earlier waves. Remaining, measured the same day: `compareSlice` **4.08%**, `imagesSlice` **10.34%**, `api.ts` **30.76%**, `gitSlice` **59.32%**. Same shape of work as `uiSlice.test.ts` — take them worst-first. | `lib/__tests__/` |
+| 2.5 | Slice coverage for the <20% offenders. **Mostly done 2026-08-05:** `uiSlice` 3.44% → **100/100**, `routingSlice` 2.08% → **100/100**, `projectsSlice` 4% → **100/100** (statements/branches), `imagesSlice` 10.34% → **100/100**, `compareSlice` 4.08% → **99.31/95.86**; `sessionSlice` and `eventSlice` were covered in earlier waves. Remaining, measured the same day: `api.ts` **53.84%**, `gitSlice` **59.32%**, `compare.ts` **82.35%**. Same shape of work as `uiSlice.test.ts` — take them worst-first. | `lib/__tests__/` |
 | 2.6 | ~~CI coverage gate at 65%, ratcheting.~~ **DONE 2026-08-05** — `vitest.config.ts` thresholds at statements 65 / branches 60 / functions 65 / lines 68 (measured 68.07 / 63.07 / 68.51 / 71.19), and `ci.yml` now runs `npm run test:coverage` so the gate actually blocks. Ratchet up as coverage lands; never lower to go green. | `vitest.config.ts`, `ci.yml` |
 
 **Exit:** overall coverage ≥65%, no main-process file at 0%, E2E green in CI on

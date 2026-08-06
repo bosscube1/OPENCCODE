@@ -48,6 +48,16 @@ src/
     projects.ts, projectsPaths.ts   project registry; assertSubpath() containment helper
     appSettings.ts, updater.ts, menu.ts, tray.ts, quickEntry.ts, crashlog.ts, openEditor.ts
     providerCatalog.ts, nanogpt*.ts, geminiLive.ts, geminiLiveConfig.ts, liveTranscripts.ts   provider integrations
+    harness/            agentic harness — single-agent LLM runs with tool calling (alongside
+                        opencode serve, which stays the primary chat path):
+      profiles.ts       AgentProfile type, validation, BUILTIN_PROFILES
+      profileStore.ts   custom-profile persistence to userData/harness-profiles.json
+      providers/        ProviderAdapter + registry (nanogpt, gemini; openai-compat/anthropic/
+                        opencode-bridge deferred)
+      tools/            ToolRegistry + built-in executors (assertSubpath-contained)
+      runner.ts         AgentRunner — conversation/tool loop; budget hard stops in code
+      controller.ts     HarnessController — profile CRUD + run lifecycle behind oc:harness:*
+                        (multi-agent DAG orchestrator deferred)
     __tests__/          vitest unit tests for main modules
   preload/
     index.ts            contextBridge definition of window.api (the ONLY bridge)
@@ -57,11 +67,12 @@ src/
     src/
       main.tsx, App.tsx React entry + shell
       components/       one .tsx per panel (Chat, Composer, ToolCall, Sidebar, GitPanel,
-                        TerminalPanel, EditorPanel, ChangesPanel, ...) + per-feature .css files
+                        TerminalPanel, EditorPanel, ChangesPanel, HarnessPanel, ...)
+                        + per-feature .css files
       lib/
         store.ts        zustand store — COMPOSITION ROOT ONLY; state lives in slices/
         slices/         domain slices: session, routing, compare, subagent, agent, projects, ui,
-                        event, editor, fileTree, git, terminal, images, attemptMachine
+                        event, editor, fileTree, git, terminal, images, attemptMachine, harness
         types.ts        shared renderer types
         *.ts            pure helper modules (format, routing, rotation, hunks, artifacts, ...)
         __tests__/      vitest unit tests for helpers and slices

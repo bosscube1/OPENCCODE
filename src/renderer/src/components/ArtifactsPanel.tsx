@@ -95,6 +95,7 @@ export function ArtifactsPanel(): JSX.Element | null {
             type="button"
             className="artifacts__btn artifacts__btn--close"
             onClick={() => setActiveArtifactID(null)}
+            aria-label="Close panel"
             title="Close panel"
           >
             ×

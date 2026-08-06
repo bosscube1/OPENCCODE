@@ -3,11 +3,12 @@
 Roadmap item M1.2. This runbook is the exact procedure for the repo owner (only the owner
 has push/release credentials).
 
-**Status: PASSED live on 2026-08-05**, on the hop `0.7.0 → 1.0.2` against the real
-`v1.0.2` GitHub Release. See § "Live result" at the end for the evidence and the parts
-that remain unproven. The pre-flight checklist and procedure below are written against
-the earlier `0.6.x → 0.7.0` hop and are kept as the reusable template — substitute the
-current version numbers when running it again.
+**Status: PASSED live twice on 2026-08-05** — `0.7.0 → 1.0.2` against the `v1.0.2`
+release, then `1.0.2 → 1.0.3` against the `v1.0.3` release. See the two "Live result"
+sections at the end for evidence and the parts that remain unproven. The pre-flight
+checklist and procedure below are written against the earlier `0.6.x → 0.7.0` hop and
+are kept as the reusable template — substitute the current version numbers when running
+it again.
 
 ## Pre-flight checklist (verified facts)
 
@@ -58,9 +59,10 @@ git push origin v0.7.0
   0.7.0 update install. Expected for an unsigned app; click through.
 - **L3 — What the unit tests cannot prove.** `src/main/__tests__/updater.test.ts` mocks
   `electron-updater` and `electron` entirely. It proves the guard logic, event→status
-  mapping, sanitized errors, confirm-before-install flow, and listener cleanup. It says
-  nothing about real `latest.yml` parsing, sha512 verification, blockmap differential
-  download, or the NSIS hand-off — that is exactly what this runbook round-trips.
+  mapping, sanitized errors, confirm-before-install flow, listener cleanup, and that the
+  opt-in logger writes to disk. It says nothing about real `latest.yml` parsing, sha512
+  verification, blockmap differential download, or the NSIS hand-off — that is exactly
+  what this runbook round-trips.
 
 ## Round-trip procedure
 
@@ -149,7 +151,7 @@ Rules that matter:
   (`installPromptOpen`, `src/main/updater.ts:33`) — restart the app; the downloaded
   update is re-offered.
 
-## Live result — 2026-08-05, 0.7.0 → 1.0.2 (PASSED)
+## Live result #1 — 2026-08-05, 0.7.0 → 1.0.2 (PASSED)
 
 Run on the owner's Windows 11 machine against the published `v1.0.2` release.
 
@@ -178,3 +180,89 @@ Still unproven after this run:
 - **The dialog itself.** The install was confirmed by its effect (install directory
   replaced, `autoInstallOnAppQuit` is `false` so nothing else could trigger it), not by an
   observed screenshot of the prompt.
+
+## Live result #2 — 2026-08-05, 1.0.2 → 1.0.3 (PASSED)
+
+Second round trip on the same machine, this time a single-patch hop, run specifically to
+try to exercise the differential-download path.
+
+| Step | Result |
+|------|--------|
+| `latest.yml` fidelity | Release asset byte-identical to `dist/latest.yml`: `version: 1.0.3`, `size: 130870003`, `sha512 tnAM9s1z…nfrSQ==` |
+| Asset fidelity | Three-way sha512 match: locally built exe = published asset = downloaded file |
+| Check + download | Installed 1.0.2 auto-checked at startup and staged the update, complete ~34 s after launch (vs ~56 s on the 0.7.0 hop) |
+| sha512 verification | Downloaded file re-hashed independently — matched. `update-info.json`: `{"fileName":"OpenCode-Desktop-1.0.3-setup.exe","sha512":"tnAM9s1z…","isAdminRightsRequired":false}` |
+| NSIS hand-off | Install directory rewritten at 19:28:02 |
+| Relaunch | Installed exe and running process both report `1.0.3.0` |
+| Re-check | Settings → UPDATES reads "OpenCode Desktop is up to date." |
+
+Still unproven after this run:
+
+- **Differential download.** Not exercised on this hop either — **now proven separately,
+  see § "Differential download — proven" below.**
+- **Signature verification.** Skipped again, not passed — still unsigned (L2, M1.1).
+
+## Differential download — proven, 2026-08-05
+
+Both GitHub round trips fetched the full 130 MB. The cause was mundane and is worth
+recording: the delta base is `<updater-cache>/installer.exe`, which is written **by the
+NSIS installer at install time**, not by the updater. On the first hop the cache was
+empty, so there was nothing to diff against.
+
+Proved on a local feed rather than by publishing throwaway GitHub releases, which would
+have meant a 260 MB upload and would have recreated the tag drift just cleaned up. The
+path executed is the same: `NsisUpdater` calls `differentialDownloadInstaller` regardless
+of provider, and the test feed set `useMultipleRangeRequest: false` to match
+`GitHubProvider`, which hardcodes that value (`GitHubProvider.js:16`). Only the host
+differs.
+
+Setup: build `9.9.0` and `9.9.1` (version bump only), install `9.9.0` via its NSIS setup
+so the cache is populated the way a real install populates it, serve `latest.yml`, the
+`9.9.1` exe + blockmap and the `9.9.0` blockmap from a Range-capable local static server,
+launch with `OPENCODE_UPDATER_LOG` set.
+
+Evidence, from two independent records that agree:
+
+| Source | Result |
+|---|---|
+| Updater log | `File has 30 changed blocks` · `Full: 127,803.18 KB, To download: 619.43 KB (0%)` · `Differential download: http://127.0.0.1:8099/OpenCode-Desktop-9.9.1-setup.exe` |
+| Updater log | 10 `download range: bytes=…` lines, matching the changed-block list |
+| Server access log | 10 × `206` partial responses totalling ~634 KB — **no full `200` for the exe** |
+| Reconstruction | Reassembled file is 130,870,454 B and its sha512 matches `latest.yml` *and* the locally built exe exactly |
+
+So the delta transferred **0.48% of the artifact** and still produced a byte-exact file.
+
+A hazard found while setting this up, worth knowing before trusting a delta run: the
+cache keeps `current.blockmap` alongside `installer.exe`, and electron-updater prefers
+that cached blockmap as the *old* one (`AppUpdater.js:696`). Installing a different build
+over an existing one replaces `installer.exe` but leaves the previous `current.blockmap`
+in place, so the two describe different files. The sha512 check makes it fail safe — the
+delta is discarded and a full download follows — but it silently costs a full transfer.
+
+Reproduce with `OPENCODE_UPDATER_LOG=<path>` on any installed build (`src/main/updater.ts`).
+The logger is off unless that variable is set, because the lines carry update URLs and
+local paths.
+
+### Incident — tag/release drift on the 1.0.3 publish
+
+The 1.0.3 artifacts were first published under a release named **`v1.0.4`**, while the
+`v1.0.4` tag pointed at the same commit as `v1.0.3` (`1a9dd56`, "chore: release v1.0.3").
+`latest.yml` inside it read `version: 1.0.3`. The updater worked — it trusts `latest.yml`,
+not the tag — but this is the same defect class as the `V1.0.1` incident that
+`scripts/release.mjs` exists to prevent: binaries attached to a tag that does not name
+them.
+
+Resolved on 2026-08-05: the four assets were attached to the `v1.0.3` release, the
+`v1.0.4` tag was deleted locally and on the remote, and the `v1.0.4` release was removed.
+Verified afterwards — `GET /repos/bosscube1/OPENCCODE/releases/latest` resolves `v1.0.3`
+with 4 assets, and `releases/download/v1.0.3/latest.yml` returns `200` and is
+byte-identical to the local build. Commit `1a9dd56` remained reachable throughout via the
+`v1.0.3` tag and `main`.
+
+**Rule for next time:** the release name, the tag, and `version:` inside `latest.yml`
+must all agree before the release is published. Deleting a published release's tag does
+not delete the release — GitHub converts it to a draft that still holds its assets, so
+the release itself has to be deleted separately in the web UI.
+
+Note the GitHub API caches `/releases/latest`; immediately after the fix it still returned
+the stale `v1.0.4`. Re-probe with a cache-busting query before concluding the fix failed.

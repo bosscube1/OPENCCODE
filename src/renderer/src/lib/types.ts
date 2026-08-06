@@ -415,3 +415,81 @@ export type GitStatus = {
 export type GitBranch = { name: string; current: boolean; remote: boolean }
 
 export type TermId = string
+
+/* ------------------------------------------------------------------ *
+ * Agentic harness (multi-provider profiles + single-agent runs)
+ * Deliberately duplicated rather than imported from src/main/harness/* (the
+ * renderer never imports main-process modules) — kept structurally identical
+ * to src/main/harness/profiles.ts, runner.ts, controller.ts and
+ * tools/registry.ts.
+ * ------------------------------------------------------------------ */
+
+export type AgentProfile = {
+  id: string
+  name: string
+  description?: string
+  provider: string
+  model: string
+  fallbackModels?: string[]
+  temperature?: number
+  maxTokens?: number
+  topP?: number
+  thinking?: { enabled: boolean; budget?: number }
+  systemPrompt?: string
+  systemPromptFile?: string
+  /** Tool allowlist; `'*'` as an element means every registered tool. */
+  tools?: string[]
+  toolDenyList?: string[]
+  readOnly?: boolean
+  maxConcurrent?: number
+  maxTurns?: number
+  tokenBudget?: number
+  costBudget?: number
+  routingSuffix?: string
+  billingRoute?: 'subscription' | 'standard'
+  caching?: boolean
+  /** Built-in profiles are read-only; clone to customise. */
+  builtin?: boolean
+  createdAt?: number
+  updatedAt?: number
+}
+
+export type RunnerResult = {
+  content: string
+  toolCallCount: number
+  usage: { input: number; output: number; reasoning?: number }
+  turns: number
+  finishReason: 'complete' | 'budget_exceeded' | 'max_turns' | 'aborted' | 'error'
+  error?: string
+}
+
+export type RunnerEvent =
+  | { type: 'thinking'; content: string }
+  | { type: 'text'; delta: string }
+  | { type: 'tool_call'; name: string; args: Record<string, unknown> }
+  | { type: 'tool_result'; name: string; output: string; error?: string }
+  | { type: 'error'; message: string }
+  | { type: 'done'; result: RunnerResult }
+  | { type: 'budget_warning'; field: string; used: number; limit: number }
+
+export type RunStatus = {
+  id: string
+  profileId: string
+  status: 'running' | 'completed' | 'failed' | 'cancelled'
+  turns: number
+  usage: { input: number; output: number }
+  startedAt: number
+  completedAt?: number
+  result?: RunnerResult
+  error?: string
+}
+
+export type HarnessToolDefinition = {
+  name: string
+  description: string
+  parameters: Record<string, unknown>
+  category: 'read' | 'write' | 'shell' | 'web' | 'custom'
+}
+
+/** Payload of the `oc:harness:event` channel. */
+export type HarnessEventPayload = { runId: string; event: RunnerEvent }

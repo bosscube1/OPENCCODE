@@ -1,0 +1,23 @@
+=== typecheck ===
+
+
+> opencode-desktop@1.0.2 typecheck:web
+> tsc --noEmit -p tsconfig.web.json --composite false
+
+=== contracts ===
+OK      mirrored constants: main and renderer agree
+
+PASS: CONTRACTS.md covers every registered channel and bridge method.
+=== vitest ===
+ RUN  v4.1.10 C:/Users/Hp/Dev/opencode-desktop
+
+
+ Test Files  82 passed (82)
+      Tests  1464 passed (1464)
+   Start at  18:11:20
+   Duration  32.75s (transform 16.88s, setup 0ms, import 27.04s, tests 97.50s, environment 34ms)
+
+=== eslint ===
+
+✖ 102 problems (0 errors, 102 warnings)
+

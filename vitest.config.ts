@@ -15,14 +15,14 @@ export default defineConfig({
        * it on rounding, and meant to be ratcheted upward as coverage lands — never lowered
        * to make a red build pass.
        *
-       * Measured 2026-08-05, after M2.3: statements 68.07, branches 63.07,
-       * functions 68.51, lines 71.19.
+       * Measured 2026-08-05, after M2.5 compareSlice + imagesSlice: statements 72.54,
+       * branches 67.64, functions 73.83, lines 75.53.
        */
       thresholds: {
-        statements: 65,
-        branches: 60,
-        functions: 65,
-        lines: 68
+        statements: 70,
+        branches: 64,
+        functions: 70,
+        lines: 73
       }
     }
   }

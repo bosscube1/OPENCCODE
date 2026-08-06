@@ -400,6 +400,79 @@ export type GitBranch = { name: string; current: boolean; remote: boolean }
 
 export type TermId = string
 
+/* --- Agentic harness (duplicated from src/main/harness/* — main must not be
+ * imported by preload; kept structurally identical) ----------------------- */
+
+export type AgentProfile = {
+  id: string
+  name: string
+  description?: string
+  provider: string
+  model: string
+  fallbackModels?: string[]
+  temperature?: number
+  maxTokens?: number
+  topP?: number
+  thinking?: { enabled: boolean; budget?: number }
+  systemPrompt?: string
+  systemPromptFile?: string
+  /** Tool allowlist; `'*'` as an element means every registered tool. */
+  tools?: string[]
+  toolDenyList?: string[]
+  readOnly?: boolean
+  maxConcurrent?: number
+  maxTurns?: number
+  tokenBudget?: number
+  costBudget?: number
+  routingSuffix?: string
+  billingRoute?: 'subscription' | 'standard'
+  caching?: boolean
+  /** Built-in profiles are read-only; clone to customise. */
+  builtin?: boolean
+  createdAt?: number
+  updatedAt?: number
+}
+
+export type RunnerResult = {
+  content: string
+  toolCallCount: number
+  usage: { input: number; output: number; reasoning?: number }
+  turns: number
+  finishReason: 'complete' | 'budget_exceeded' | 'max_turns' | 'aborted' | 'error'
+  error?: string
+}
+
+export type RunnerEvent =
+  | { type: 'thinking'; content: string }
+  | { type: 'text'; delta: string }
+  | { type: 'tool_call'; name: string; args: Record<string, unknown> }
+  | { type: 'tool_result'; name: string; output: string; error?: string }
+  | { type: 'error'; message: string }
+  | { type: 'done'; result: RunnerResult }
+  | { type: 'budget_warning'; field: string; used: number; limit: number }
+
+export type RunStatus = {
+  id: string
+  profileId: string
+  status: 'running' | 'completed' | 'failed' | 'cancelled'
+  turns: number
+  usage: { input: number; output: number }
+  startedAt: number
+  completedAt?: number
+  result?: RunnerResult
+  error?: string
+}
+
+export type HarnessToolDefinition = {
+  name: string
+  description: string
+  parameters: Record<string, unknown>
+  category: 'read' | 'write' | 'shell' | 'web' | 'custom'
+}
+
+/** Payload of the `oc:harness:event` channel. */
+export type HarnessEventPayload = { runId: string; event: RunnerEvent }
+
 export interface OpencodeApi {
   status(): Promise<ServerStatus>
   restart(): Promise<ServerStatus>
@@ -548,6 +621,29 @@ export interface OpencodeApi {
     onData(cb: (e: { id: TermId; data: string }) => void): () => void
     onExit(cb: (e: { id: TermId; code: number }) => void): () => void
   }
+  harness: {
+    profiles: {
+      list(): Promise<AgentProfile[]>
+      get(id: string): Promise<AgentProfile | null>
+      /** Validated and normalised in main; returns the saved profile. */
+      save(profile: unknown): Promise<AgentProfile>
+      remove(id: string): Promise<boolean>
+      /** Connectivity probe for the profile's provider. */
+      test(id: string): Promise<boolean>
+    }
+    run: {
+      /** Starts a run; resolves to its runId. Events stream over `onEvent`. */
+      start(params: { profileId: string; task: string; directory: string }): Promise<string>
+      stop(runId: string): Promise<void>
+      status(runId: string): Promise<RunStatus | null>
+      list(): Promise<RunStatus[]>
+    }
+    tools: {
+      list(): Promise<HarnessToolDefinition[]>
+    }
+    /** Registers a harness-event listener; call the returned function to unsubscribe. */
+    onEvent(cb: (payload: HarnessEventPayload) => void): () => void
+  }
   openEditor(a: { directory: string; path: string; line?: number; column?: number }): Promise<void>
   onEvent(cb: (e: OcEvent) => void): () => void
   onServer(cb: (s: ServerStatus) => void): () => void
@@ -567,7 +663,8 @@ function subscribe<T>(
     | 'update:status'
     | 'oc:live:message'
     | 'oc:term:data'
-    | 'oc:term:exit',
+    | 'oc:term:exit'
+    | 'oc:harness:event',
   callback: (payload: T) => void
 ): () => void {
   const listener = (_event: IpcRendererEvent, payload: T): void => {
@@ -710,6 +807,25 @@ const api: OpencodeApi = {
     onExit: (cb) => subscribe<{ id: TermId; code: number }>('oc:term:exit', cb)
   },
   openEditor: (a) => ipcRenderer.invoke('oc:openEditor', a),
+  harness: {
+    profiles: {
+      list: () => ipcRenderer.invoke('oc:harness:profiles:list'),
+      get: (id) => ipcRenderer.invoke('oc:harness:profiles:get', id),
+      save: (profile) => ipcRenderer.invoke('oc:harness:profiles:save', profile),
+      remove: (id) => ipcRenderer.invoke('oc:harness:profiles:delete', id),
+      test: (id) => ipcRenderer.invoke('oc:harness:profiles:test', id)
+    },
+    run: {
+      start: (params) => ipcRenderer.invoke('oc:harness:run:start', params),
+      stop: (runId) => ipcRenderer.invoke('oc:harness:run:stop', runId),
+      status: (runId) => ipcRenderer.invoke('oc:harness:run:status', runId),
+      list: () => ipcRenderer.invoke('oc:harness:run:list')
+    },
+    tools: {
+      list: () => ipcRenderer.invoke('oc:harness:tools:list')
+    },
+    onEvent: (cb) => subscribe<HarnessEventPayload>('oc:harness:event', cb)
+  },
   onEvent: (cb) => subscribe<OcEvent>('oc:event', cb),
   onServer: (cb) => subscribe<ServerStatus>('oc:server', cb),
   onMainMenuNewSession: (cb) => {
